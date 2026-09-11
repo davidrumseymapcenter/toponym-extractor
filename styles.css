@@ -13,12 +13,16 @@
 
 * { box-sizing: border-box; }
 
+/* Every size below is in rem, so this one value scales the whole interface.
+   Browser default is 16px; 15px reads a little tighter. */
+html { font-size: 15px; }
+
 body {
   margin: 0;
   padding: 0 1.25rem 4rem;
   background: var(--bg);
   color: var(--ink);
-  font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  font: 1rem/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
 }
 
 header, main, footer { max-width: 1100px; margin: 0 auto; }
