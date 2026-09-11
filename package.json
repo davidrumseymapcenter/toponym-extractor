@@ -1,0 +1,16 @@
+{
+  "name": "mapreader-georeferencer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Browser app that turns MapReader pixel-coordinate GeoJSON into lat/long tables using an Allmaps Georeference Annotation.",
+  "scripts": {
+    "build": "esbuild build/entry.js --bundle --format=iife --global-name=AllmapsTransform --outfile=vendor/allmaps-transform.js --legal-comments=none",
+    "serve": "python3 -m http.server 8000",
+    "test": "node test/smoke.mjs"
+  },
+  "devDependencies": {
+    "@allmaps/transform": "^1.0.0-beta.52",
+    "esbuild": "^0.28.2",
+    "jsdom": "^27.0.1"
+  }
+}

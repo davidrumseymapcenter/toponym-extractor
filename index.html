@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MapReader → lat/long</title>
+<meta name="description" content="Convert MapReader pixel-coordinate GeoJSON into latitude/longitude tables using an Allmaps Georeference Annotation. Runs entirely in the browser.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='14'>🗺️</text></svg>">
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+
+<header>
+  <h1>MapReader → lat/long</h1>
+  <p class="sub">
+    Turns MapReader text detections in <strong>pixel coordinates</strong> into a
+    latitude/longitude table, using the ground control points in an
+    <strong>Allmaps Georeference Annotation</strong>. Everything runs in this
+    browser tab — your files are never uploaded anywhere.
+  </p>
+</header>
+
+<main>
+
+<!-- 1. Inputs -->
+<section>
+  <h2><span class="step">1</span> Inputs</h2>
+
+  <div class="two-col">
+    <div class="card drop" id="drop-pixels">
+      <h3>MapReader detections</h3>
+      <p class="hint">GeoJSON in pixel coordinates. Drop a file here, choose one, or paste below.</p>
+      <input type="file" id="pixel-file" accept=".json,.geojson,.txt,application/json,application/geo+json">
+      <textarea id="pixel-text" rows="5" spellcheck="false"
+        placeholder='{"type":"FeatureCollection","features":[ … ]}
+
+A bare list of features, one-per-line NDJSON, or a single feature also works.'></textarea>
+      <p class="status" id="pixel-status">No detections loaded.</p>
+    </div>
+
+    <div class="card drop" id="drop-annotation">
+      <h3>Allmaps Georeference Annotation</h3>
+      <p class="hint">The <code>.json</code> saved from Allmaps Editor, or its annotation URL.</p>
+      <input type="file" id="annotation-file" accept=".json,application/json">
+      <div class="url-row">
+        <input type="url" id="annotation-url" spellcheck="false"
+          placeholder="https://annotations.allmaps.org/maps/…">
+        <button type="button" id="fetch-annotation">Fetch</button>
+      </div>
+      <textarea id="annotation-text" rows="3" spellcheck="false"
+        placeholder="Or paste the annotation JSON here."></textarea>
+      <p class="status" id="annotation-status">No annotation loaded.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 2. Options -->
+<section>
+  <h2><span class="step">2</span> Options</h2>
+
+  <div class="options">
+
+    <div class="option">
+      <label for="score-threshold">Minimum confidence score</label>
+      <div class="slider-row">
+        <input type="range" id="score-threshold" min="0" max="1" step="0.01" value="0.75">
+        <input type="number" id="score-number" min="0" max="1" step="0.01" value="0.75">
+      </div>
+      <p class="hint" id="score-hint">Detections scoring below this are left out of the results.</p>
+      <label class="check">
+        <input type="checkbox" id="keep-unscored" checked>
+        Keep detections that have no score
+      </label>
+    </div>
+
+    <div class="option">
+      <label for="text-filter">Text contains (optional)</label>
+      <input type="text" id="text-filter" placeholder="e.g. Diambour" spellcheck="false">
+      <p class="hint">Case-insensitive substring match on the transcribed text.</p>
+    </div>
+
+    <div class="option">
+      <label for="y-axis">Pixel Y axis</label>
+      <select id="y-axis">
+        <option value="auto" selected>Auto-detect</option>
+        <option value="down">Y increases downward (0 at top of image)</option>
+        <option value="negated">Y is negative (multiply by −1)</option>
+        <option value="up">Y increases upward (subtract from image height)</option>
+      </select>
+      <p class="hint" id="y-axis-hint">
+        Allmaps ground control points use image pixels with Y growing
+        <em>downward</em> from the top-left corner. MapReader output that has
+        passed through a GIS often has negative or upward Y instead, which has
+        to be corrected or the result comes out mirrored.
+      </p>
+    </div>
+
+    <div class="option">
+      <label for="transformation">Transformation</label>
+      <select id="transformation">
+        <option value="" selected>From annotation</option>
+        <option value="straight">straight</option>
+        <option value="helmert">helmert</option>
+        <option value="polynomial1">polynomial (1st order)</option>
+        <option value="polynomial2">polynomial (2nd order)</option>
+        <option value="polynomial3">polynomial (3rd order)</option>
+        <option value="thinPlateSpline">thinPlateSpline</option>
+        <option value="projective">projective</option>
+      </select>
+      <p class="hint" id="transformation-hint">
+        Leave this alone to use exactly what you chose in Allmaps Editor.
+      </p>
+      <label class="check">
+        <input type="checkbox" id="full-outlines" checked>
+        Transform full outlines (uncheck for label centres only — much faster)
+      </label>
+    </div>
+
+  </div>
+
+  <div class="run-row">
+    <button type="button" id="run" disabled>Convert to lat/long</button>
+    <span class="status" id="run-status">Load both inputs to continue.</span>
+  </div>
+  <div class="progress" id="progress" hidden><div id="progress-bar"></div></div>
+</section>
+
+<!-- 3. Results -->
+<section id="results" hidden>
+  <h2><span class="step">3</span> Results</h2>
+
+  <p class="summary" id="summary"></p>
+
+  <div class="downloads">
+    <button type="button" id="dl-csv">Download CSV</button>
+    <button type="button" id="dl-geojson">Download GeoJSON (outlines)</button>
+    <button type="button" id="dl-points">Download GeoJSON (label points)</button>
+    <button type="button" id="toggle-map" class="secondary">Show map preview</button>
+  </div>
+
+  <p class="status" id="map-status" hidden></p>
+  <div id="map" hidden></div>
+
+  <div class="table-wrap">
+    <table id="table">
+      <thead><tr id="table-head"></tr></thead>
+      <tbody id="table-body"></tbody>
+    </table>
+  </div>
+  <p class="hint" id="table-note"></p>
+</section>
+
+</main>
+
+<footer>
+  <p>
+    Georeferencing maths by
+    <a href="https://github.com/allmaps/allmaps/tree/main/packages/transform">@allmaps/transform</a>,
+    bundled locally. Confidence scores come from the text-recognition stage of
+    <a href="https://github.com/Living-with-machines/MapReader">MapReader</a>.
+  </p>
+</footer>
+
+<script src="./vendor/allmaps-transform.js"></script>
+<script src="./app.js"></script>
+</body>
+</html>
