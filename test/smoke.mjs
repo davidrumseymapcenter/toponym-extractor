@@ -143,6 +143,32 @@ paste('pixel-text', JSON.stringify({
 }))
 check('all-1.0 scores flagged as rounded/unusable', /all exactly 1.*whole numbers only/.test($('pixel-status').textContent), $('pixel-status').textContent)
 
+console.log('\nThreshold readout and adaptive slider')
+paste('pixel-text', read('samples/mapreader-detections.example.geojson'))
+$('score-number').value = '0.9'
+fire($('score-number'), 'input')
+check('readout reports the effect', /Scores run 0.31–0.99, median 0.94. At 0.9 this drops 4 of 12 \(33%\), keeping 8./.test($('score-hint').textContent), $('score-hint').textContent)
+check('slider enabled for varied scores', $('score-threshold').disabled === false)
+
+fire($('keep-unscored'), 'change')
+paste('pixel-text', JSON.stringify({
+  type: 'FeatureCollection',
+  features: [1, 1, 1, 1].map((score) => ({ type: 'Feature', properties: { text: 'x', score }, geometry: { type: 'Polygon', coordinates: box } }))
+}))
+check('slider disabled when every score is identical', $('score-threshold').disabled === true && $('score-number').disabled === true)
+check('disabled reason explained', /scores exactly 1, so filtering by score is switched off/.test($('score-hint').textContent), $('score-hint').textContent)
+
+// The stored 0.9 must not be applied while the control is off.
+$('run').click()
+await new Promise((resolve) => window.setTimeout(resolve, 200))
+check('identical scores do not filter everything out', [...document.querySelectorAll('#table-body tr')].length === 4,
+  [...document.querySelectorAll('#table-body tr')].length)
+check('summary explains scores were unused', /scores in this file are all identical, so they were not used/.test($('summary').textContent), $('summary').textContent)
+
+paste('pixel-text', JSON.stringify(noScore))
+check('slider disabled when there are no scores', $('score-threshold').disabled === true)
+check('no-score reason explained', /nothing to filter on/.test($('score-hint').textContent), $('score-hint').textContent)
+
 console.log('\nTolerant parsing of a bare feature with a trailing comma')
 paste('pixel-text', '{"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [[[768.09, -759.38], [767.57, -794.02], [774.43, -792.60], [768.09, -759.38]]]}, "properties": {"text": "Diambour", "score": 0.98}},')
 check('single trailing-comma feature accepted', /1 features loaded/.test($('pixel-status').textContent), $('pixel-status').textContent)

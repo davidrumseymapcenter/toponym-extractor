@@ -259,6 +259,39 @@
     return key ? String(props[key]) : ''
   }
 
+  // Sorted score values plus the summary the slider needs. Kept on state so
+  // moving the slider can report its effect without rescanning the features.
+  function summariseScores (features) {
+    var values = []
+    features.forEach(function (f) {
+      var score = scoreOf(f.properties)
+      if (score !== null) values.push(score)
+    })
+    values.sort(function (a, b) { return a - b })
+
+    var distinct = {}
+    values.forEach(function (v) { distinct[v] = 1 })
+
+    return {
+      values: values,
+      count: values.length,
+      total: features.length,
+      distinct: Object.keys(distinct).length,
+      min: values[0],
+      max: values[values.length - 1],
+      median: values.length ? values[Math.floor(values.length / 2)] : null
+    }
+  }
+
+  // How many scored values fall below a threshold. The array is sorted, so stop
+  // at the first value that passes.
+  function countBelow (values, threshold) {
+    for (var i = 0; i < values.length; i++) {
+      if (values[i] >= threshold) return i
+    }
+    return values.length
+  }
+
   // Not every feature carries every field, so scan a few before giving up.
   function firstKeyFound (features, pick) {
     for (var i = 0; i < features.length && i < 200; i++) {
@@ -382,6 +415,7 @@
       var result = normaliseFeatures(parseLooseJson(text))
       state.pixelFeatures = result.features
       state.pixelWarnings = result.warnings
+      state.scoreStats = summariseScores(result.features)
       state.scoreKey = firstKeyFound(result.features, pickScoreKey)
       state.textKey = firstKeyFound(result.features, function (props) {
         return pickKey(props, TEXT_KEYS)
@@ -395,8 +429,10 @@
       $('y-axis-hint').dataset.detected = detected
     } catch (err) {
       state.pixelFeatures = null
+      state.scoreStats = null
       setStatus($('pixel-status'), err.message, 'error')
     }
+    updateScoreEffect()
     refreshRunButton()
   }
 
@@ -418,6 +454,53 @@
       setStatus($('annotation-status'), err.message, 'error')
     }
     refreshRunButton()
+  }
+
+  // Describes what the threshold will actually do to the loaded file, and turns
+  // the control off when the scores carry no information — a slider that looks
+  // like it is filtering while doing nothing is worse than no slider.
+  function updateScoreEffect () {
+    var hint = $('score-hint')
+    var slider = $('score-threshold')
+    var number = $('score-number')
+    var stats = state.scoreStats
+
+    if (!state.pixelFeatures || !stats) {
+      state.scoreFilterActive = false
+      slider.disabled = number.disabled = true
+      hint.textContent = 'Detections scoring below this are left out of the results.'
+      return
+    }
+
+    if (!stats.count) {
+      state.scoreFilterActive = false
+      slider.disabled = number.disabled = true
+      hint.textContent = 'No scores in this file, so there is nothing to filter on. All ' +
+        stats.total.toLocaleString() + ' detections will be converted.'
+      return
+    }
+
+    if (stats.distinct === 1) {
+      state.scoreFilterActive = false
+      slider.disabled = number.disabled = true
+      hint.textContent = 'Every detection in this file scores exactly ' + stats.values[0] +
+        ', so filtering by score is switched off — this export carries no usable confidence values.'
+      return
+    }
+
+    state.scoreFilterActive = true
+    slider.disabled = number.disabled = false
+
+    var threshold = Number(number.value)
+    var unscored = stats.total - stats.count
+    var dropped = countBelow(stats.values, threshold) +
+      ($('keep-unscored').checked ? 0 : unscored)
+    var kept = stats.total - dropped
+
+    hint.textContent = 'Scores run ' + stats.min + '–' + stats.max + ', median ' + stats.median +
+      '. At ' + threshold + ' this drops ' + dropped.toLocaleString() + ' of ' +
+      stats.total.toLocaleString() + ' (' + Math.round((dropped / stats.total) * 100) + '%), keeping ' +
+      kept.toLocaleString() + '.'
   }
 
   function refreshRunButton () {
@@ -442,7 +525,9 @@
   /* ── The conversion run ─────────────────────────────────────────────────── */
 
   function run () {
-    var threshold = Number($('score-number').value)
+    // With a disabled slider the stored value must not be applied, or a file
+    // whose scores are all 0.5 would silently lose every row.
+    var threshold = state.scoreFilterActive ? Number($('score-number').value) : 0
     var keepUnscored = $('keep-unscored').checked
     var textNeedle = $('text-filter').value.trim().toLowerCase()
     var fullOutlines = $('full-outlines').checked
@@ -523,6 +608,7 @@
           yMode: yMode,
           transformationType: transformationType,
           threshold: threshold,
+          scoreFiltered: state.scoreFilterActive,
           fullOutlines: fullOutlines
         })
       }
@@ -543,10 +629,13 @@
 
     var total = state.pixelFeatures.length
     var dropped = total - attempted
+    var reason = settings.scoreFiltered
+      ? 'score below ' + settings.threshold + ' or text filter'
+      : 'text filter; scores in this file are all identical, so they were not used'
     var summary = '<strong>' + rows.length.toLocaleString() + '</strong> of <strong>' +
       total.toLocaleString() + '</strong> detections converted. ' +
-      dropped.toLocaleString() + ' filtered out (score below ' + settings.threshold +
-      ' or text filter). Transformation: <code>' + settings.transformationType + '</code>, ' +
+      dropped.toLocaleString() + ' filtered out (' + reason +
+      '). Transformation: <code>' + settings.transformationType + '</code>, ' +
       state.annotation.gcps.length + ' GCPs, Y treated as ' +
       (settings.yMode === 'negated' ? 'negative' : settings.yMode === 'up' ? 'upward' : 'downward') + '.'
     if (failures) summary += ' <strong>' + failures + '</strong> detections could not be transformed.'
@@ -878,11 +967,17 @@
 
     var slider = $('score-threshold')
     var number = $('score-number')
-    slider.addEventListener('input', function () { number.value = slider.value })
+    slider.addEventListener('input', function () {
+      number.value = slider.value
+      updateScoreEffect()
+    })
     number.addEventListener('input', function () {
       var value = Math.min(1, Math.max(0, Number(number.value) || 0))
       slider.value = value
+      updateScoreEffect()
     })
+    $('keep-unscored').addEventListener('change', updateScoreEffect)
+    updateScoreEffect()
 
     $('run').addEventListener('click', run)
     $('dl-csv').addEventListener('click', downloadCsv)

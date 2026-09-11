@@ -58,6 +58,21 @@ Two warnings to watch for there:
 Scores are shown and exported exactly as they appear in the input file, with no
 rounding or padding, since that column is how you judge the data.
 
+The threshold control reports what it will actually do to the file you loaded,
+updating as you drag it, so a threshold can be chosen by its effect rather than
+by guesswork:
+
+```
+Scores run 0.4–1, median 0.84. At 0.75 this drops 3,259 of 9,552 (34%),
+keeping 6,293.
+```
+
+When every detection in a file carries the same score — as in the
+davidrumsey.com exports, where all of them are `1` — the control switches off
+and says why, rather than appearing to filter while doing nothing. The stored
+threshold is not applied in that state, so a file whose scores were all `0.5`
+cannot silently lose every row.
+
 ### The Y axis matters
 
 Allmaps resource coordinates are image pixels: origin top-left, Y growing
