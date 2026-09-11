@@ -11,10 +11,18 @@
 
   var GcpTransformer = window.AllmapsTransform && window.AllmapsTransform.GcpTransformer
 
-  // Fields MapReader (and neighbouring tools) use for the transcription and the
-  // recognition confidence, in order of preference.
+  // Fields MapReader (and neighbouring tools) use for the transcription.
   var TEXT_KEYS = ['text', 'transcription', 'label', 'name', 'word']
-  var SCORE_KEYS = ['score', 'confidence', 'text_score', 'prob']
+
+  // The score we filter on is the *recognition* confidence: how sure the model
+  // is that it read the characters correctly. Text-spotting pipelines commonly
+  // emit a detection score as well — how sure it is that the box contains text
+  // at all — and that one sits close to 1.0 for nearly every surviving box,
+  // which makes it useless as a quality filter. So a recognition field always
+  // wins, whatever it is called, and generic names are only a fallback.
+  var RECOGNITION_PATTERN = /^(rec|recog|recognition|text|word|ocr|transcription)[_-]?(score|conf|confidence|prob|probability)$/i
+  var DETECTION_PATTERN = /^(det|detect|detection|box|bbox|obj|objectness)[_-]?(score|conf|confidence|prob|probability)$/i
+  var SCORE_KEYS = ['score', 'confidence', 'prob']
 
   var MAX_TABLE_ROWS = 1000
   var CHUNK_SIZE = 200 // features transformed per animation frame
@@ -251,11 +259,86 @@
     return key ? String(props[key]) : ''
   }
 
+  // Not every feature carries every field, so scan a few before giving up.
+  function firstKeyFound (features, pick) {
+    for (var i = 0; i < features.length && i < 200; i++) {
+      var key = pick(features[i].properties)
+      if (key) return key
+    }
+    return null
+  }
+
+  function isNumeric (value) {
+    return value !== null && value !== '' && isFinite(Number(value))
+  }
+
+  // A recognition-confidence field if there is one, otherwise a generic score
+  // name. Detection scores are never chosen.
+  function pickScoreKey (props) {
+    var keys = Object.keys(props)
+    var i
+    for (i = 0; i < keys.length; i++) {
+      if (RECOGNITION_PATTERN.test(keys[i]) && isNumeric(props[keys[i]])) return keys[i]
+    }
+    for (i = 0; i < SCORE_KEYS.length; i++) {
+      if (isNumeric(props[SCORE_KEYS[i]])) return SCORE_KEYS[i]
+    }
+    return null
+  }
+
+  // The value exactly as it appears in the input file, untouched. This is what
+  // gets displayed and exported.
+  function rawScoreOf (props) {
+    var key = pickScoreKey(props)
+    return key ? props[key] : undefined
+  }
+
+  // A numeric copy, used only for comparing against the threshold and for
+  // sorting. Never displayed.
   function scoreOf (props) {
-    var key = pickKey(props, SCORE_KEYS)
+    var key = pickScoreKey(props)
     if (!key) return null
     var value = Number(props[key])
     return isFinite(value) ? value : null
+  }
+
+  // Reports the range and the number of distinct score values, and names the
+  // field they came from. A single distinct value (or a whole-number range)
+  // usually means the scores were rounded away upstream — a GIS round-trip that
+  // typed the column as an integer will turn every 0.31–0.99 into 0 or 1.
+  function describeScores (features) {
+    var key = null
+    var values = []
+    var skipped = {}
+    features.forEach(function (f) {
+      if (!key) key = pickScoreKey(f.properties)
+      Object.keys(f.properties).forEach(function (k) {
+        if (k === key || !isNumeric(f.properties[k])) return
+        if (DETECTION_PATTERN.test(k) || SCORE_KEYS.indexOf(k) !== -1) skipped[k] = 1
+      })
+      var score = scoreOf(f.properties)
+      if (score !== null) values.push(score)
+    })
+
+    if (!values.length) {
+      return 'no recognition score found (looked for a rec/text/ocr score field, then ' +
+        SCORE_KEYS.join(', ') + ')'
+    }
+
+    var min = Math.min.apply(null, values)
+    var max = Math.max.apply(null, values)
+    var distinct = Object.keys(values.reduce(function (set, v) { set[v] = 1; return set }, {})).length
+    var summary = values.length.toLocaleString() + ' with a "' + key + '" (' +
+      (min === max ? 'all exactly ' + min : 'range ' + min + '–' + max + ', ' + distinct + ' distinct values') + ')'
+
+    var allWhole = values.every(function (v) { return v === Math.round(v) })
+    if (allWhole) summary += ' ⚠ whole numbers only — the scores look rounded, so filtering by them will not work'
+
+    var skippedKeys = Object.keys(skipped)
+    if (skippedKeys.length) {
+      summary += '; not filtering on ' + skippedKeys.join(', ') + ' — shown as its own column instead'
+    }
+    return summary
   }
 
   /* ── Y-axis handling ────────────────────────────────────────────────────── */
@@ -299,11 +382,14 @@
       var result = normaliseFeatures(parseLooseJson(text))
       state.pixelFeatures = result.features
       state.pixelWarnings = result.warnings
+      state.scoreKey = firstKeyFound(result.features, pickScoreKey)
+      state.textKey = firstKeyFound(result.features, function (props) {
+        return pickKey(props, TEXT_KEYS)
+      })
 
-      var scored = result.features.filter(function (f) { return scoreOf(f.properties) !== null }).length
       var detected = detectYMode(result.features)
       var parts = [result.features.length.toLocaleString() + ' features loaded' + (origin ? ' from ' + origin : '')]
-      parts.push(scored.toLocaleString() + ' with a score')
+      parts.push(describeScores(result.features))
       parts.push('Y looks ' + (detected === 'negated' ? 'negative (will be flipped)' : 'downward (used as-is)'))
       setStatus($('pixel-status'), parts.concat(result.warnings).join(' · '), 'ok')
       $('y-axis-hint').dataset.detected = detected
@@ -413,6 +499,7 @@
           rows.push({
             text: textOf(feature.properties),
             score: scoreOf(feature.properties),
+            score_raw: rawScoreOf(feature.properties),
             lon: centroid[0],
             lat: centroid[1],
             pixel_x: pixelCentroid[0],
@@ -474,32 +561,42 @@
 
   /* ── Table ──────────────────────────────────────────────────────────────── */
 
-  var BASE_COLUMNS = [
-    { key: 'text', label: 'text' },
-    { key: 'score', label: 'score', num: true, digits: 3 },
-    { key: 'lat', label: 'latitude', num: true, digits: 6 },
-    { key: 'lon', label: 'longitude', num: true, digits: 6 },
-    { key: 'pixel_x', label: 'pixel x', num: true, digits: 1 },
-    { key: 'pixel_y', label: 'pixel y', num: true, digits: 1 },
-    { key: 'geometry_type', label: 'geometry' },
-    { key: 'vertex_count', label: 'vertices', num: true, digits: 0 }
-  ]
+  // The text and score columns are labelled with the field names actually used,
+  // so they can be told apart from any other score-like column in the file.
+  function baseColumns () {
+    return [
+      { key: 'text', label: state.textKey || 'text' },
+      // Sorted and filtered on the numeric copy, but displayed straight from
+      // the file: 0.98 stays 0.98, and a file holding a rounded 1 shows as 1
+      // rather than a convincing-looking 1.000.
+      { key: 'score', label: state.scoreKey || 'score', num: true, display: 'score_raw' },
+      { key: 'lat', label: 'latitude', num: true, digits: 6 },
+      { key: 'lon', label: 'longitude', num: true, digits: 6 },
+      { key: 'pixel_x', label: 'pixel x', num: true, digits: 1 },
+      { key: 'pixel_y', label: 'pixel y', num: true, digits: 1 },
+      { key: 'geometry_type', label: 'geometry' },
+      { key: 'vertex_count', label: 'vertices', num: true, digits: 0 }
+    ]
+  }
 
   // Any other MapReader property (patch id, page, …) becomes its own column.
   function buildColumns () {
     var extras = []
     var seen = {}
-    var usedKeys = TEXT_KEYS.concat(SCORE_KEYS)
     state.rows.slice(0, 200).forEach(function (row) {
+      // Only the two fields already shown as their own columns are excluded, so
+      // a detection score sitting alongside the recognition score stays visible.
+      var scoreKey = pickScoreKey(row.properties)
+      var textKey = pickKey(row.properties, TEXT_KEYS)
       Object.keys(row.properties).forEach(function (key) {
-        if (seen[key] || usedKeys.indexOf(key) !== -1) return
+        if (seen[key] || key === scoreKey || key === textKey) return
         var value = row.properties[key]
         if (value !== null && typeof value === 'object') return
         seen[key] = true
         extras.push({ key: key, label: key, prop: true })
       })
     })
-    state.columns = BASE_COLUMNS.concat(extras)
+    state.columns = baseColumns().concat(extras)
   }
 
   function cellValue (row, column) {
@@ -507,9 +604,13 @@
   }
 
   function formatCell (row, column) {
-    var value = cellValue(row, column)
+    var value = column.display ? row[column.display] : cellValue(row, column)
     if (value === null || value === undefined || value === '') return '—'
-    if (column.num && typeof value === 'number') return value.toFixed(column.digits)
+    // Only computed values (lat/long, pixel centres) are rounded for display.
+    // Anything carried over from the input file is printed as-is.
+    if (column.num && typeof value === 'number' && column.digits !== undefined) {
+      return value.toFixed(column.digits)
+    }
     return String(value)
   }
 
@@ -579,7 +680,8 @@
 
   function downloadCsv () {
     var extras = state.columns.filter(function (c) { return c.prop })
-    var header = ['text', 'score', 'latitude', 'longitude', 'pixel_x', 'pixel_y', 'geometry_type', 'vertex_count']
+    var header = [state.textKey || 'text', state.scoreKey || 'score',
+      'latitude', 'longitude', 'pixel_x', 'pixel_y', 'geometry_type', 'vertex_count']
       .concat(extras.map(function (c) { return c.key }))
     if (state.settings.fullOutlines) header.push('geometry_wkt')
 
@@ -587,7 +689,7 @@
     state.rows.forEach(function (row) {
       var cells = [
         row.text,
-        row.score === null ? '' : row.score,
+        row.score_raw === undefined ? '' : row.score_raw,
         row.lat.toFixed(7),
         row.lon.toFixed(7),
         row.pixel_x.toFixed(2),
@@ -708,7 +810,7 @@
         color: '#1f6f8b',
         fillColor: '#5fb0cc',
         fillOpacity: 0.8
-      }).bindTooltip((row.text || '(no text)') + (row.score === null ? '' : ' · ' + row.score))
+      }).bindTooltip((row.text || '(no text)') + (row.score_raw === undefined ? '' : ' · ' + row.score_raw))
     })
     state.layer = L.layerGroup(markers).addTo(state.map)
     if (markers.length) {

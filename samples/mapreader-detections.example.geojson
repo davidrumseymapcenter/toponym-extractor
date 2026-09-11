@@ -32,7 +32,7 @@
    },
    "properties": {
     "text": "Diambour",
-    "score": 0.56
+    "score": 0.98
    }
   },
   {
@@ -66,7 +66,7 @@
    },
    "properties": {
     "text": "Champ de Mars",
-    "score": 0.45
+    "score": 0.99
    }
   },
   {
@@ -100,7 +100,7 @@
    },
    "properties": {
     "text": "Trocadero",
-    "score": 0.77
+    "score": 0.96
    }
   },
   {
@@ -134,7 +134,7 @@
    },
    "properties": {
     "text": "Pont d'Iena",
-    "score": 0.4
+    "score": 0.93
    }
   },
   {
@@ -168,7 +168,7 @@
    },
    "properties": {
     "text": "Esplanade",
-    "score": 0.69
+    "score": 0.91
    }
   },
   {
@@ -202,7 +202,7 @@
    },
    "properties": {
     "text": "Palais",
-    "score": 0.58
+    "score": 0.95
    }
   },
   {
@@ -236,7 +236,7 @@
    },
    "properties": {
     "text": "Avenue",
-    "score": 0.39
+    "score": 0.88
    }
   },
   {
@@ -270,7 +270,7 @@
    },
    "properties": {
     "text": "Seine",
-    "score": 0.67
+    "score": 0.97
    }
   },
   {
@@ -304,7 +304,7 @@
    },
    "properties": {
     "text": "Quai",
-    "score": 0.37
+    "score": 0.82
    }
   },
   {
@@ -338,7 +338,7 @@
    },
    "properties": {
     "text": "Jardin",
-    "score": 0.63
+    "score": 0.94
    }
   },
   {
@@ -406,7 +406,7 @@
    },
    "properties": {
     "text": "Rue",
-    "score": 0.41
+    "score": 0.64
    }
   }
  ]

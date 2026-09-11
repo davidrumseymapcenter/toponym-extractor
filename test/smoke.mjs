@@ -90,6 +90,59 @@ check('polynomial order folded into type', /polynomial1/.test($('annotation-stat
 check('image size read', /4708×1860/.test($('annotation-status').textContent), $('annotation-status').textContent)
 check('run enabled', $('run').disabled === false)
 
+console.log('\nScore diagnostics')
+check('score field named and ranged', /12 with a "score" \(range 0\.31–0\.99, \d+ distinct values\)/.test($('pixel-status').textContent), $('pixel-status').textContent)
+check('no rounding warning on good data', !/rounded/.test($('pixel-status').textContent))
+
+const rounded = JSON.parse(read('samples/mapreader-detections.example.geojson'))
+rounded.features.forEach((f) => { f.properties.score = Math.round(f.properties.score) })
+paste('pixel-text', JSON.stringify(rounded))
+check('rounded scores flagged', /whole numbers only/.test($('pixel-status').textContent), $('pixel-status').textContent)
+
+const noScore = JSON.parse(read('samples/mapreader-detections.example.geojson'))
+noScore.features.forEach((f) => { delete f.properties.score })
+paste('pixel-text', JSON.stringify(noScore))
+check('missing score field named', /no recognition score found/.test($('pixel-status').textContent), $('pixel-status').textContent)
+
+const altKey = JSON.parse(read('samples/mapreader-detections.example.geojson'))
+altKey.features.forEach((f) => { f.properties.confidence = f.properties.score; delete f.properties.score })
+paste('pixel-text', JSON.stringify(altKey))
+check('alternative score key used', /with a "confidence"/.test($('pixel-status').textContent), $('pixel-status').textContent)
+
+console.log('\nRecognition score wins over a detection score')
+const box = [[[300, -300], [340, -300], [340, -340], [300, -340], [300, -300]]]
+const bothScores = {
+  type: 'FeatureCollection',
+  features: [
+    { text: 'Diambour', score: 1.0, rec_score: 0.98 },
+    { text: 'Quai', score: 0.999, rec_score: 0.82 },
+    { text: 'smudge', score: 1.0, rec_score: 0.31 }
+  ].map((properties) => ({ type: 'Feature', properties, geometry: { type: 'Polygon', coordinates: box } }))
+}
+paste('pixel-text', JSON.stringify(bothScores))
+const bothStatus = $('pixel-status').textContent
+check('rec_score chosen, not score', /with a "rec_score" \(range 0\.31–0\.98/.test(bothStatus), bothStatus)
+check('detection score called out', /not filtering on score — shown as its own column/.test(bothStatus), bothStatus)
+
+$('score-number').value = '0.5'
+fire($('score-number'), 'input')
+$('run').click()
+await new Promise((resolve) => window.setTimeout(resolve, 200))
+const bothHeader = [...document.querySelectorAll('#table-head th')].map((th) => th.textContent.trim())
+check('columns name the fields used', bothHeader.slice(0, 2).join(',') === 'text,rec_score' && bothHeader.includes('score'), bothHeader.join(','))
+const bothRows = [...document.querySelectorAll('#table-body tr')]
+check('filtering used rec_score', bothRows.length === 2, bothRows.map((tr) => tr.children[0].textContent).join(','))
+check('score column shows rec_score verbatim', bothRows.map((tr) => tr.children[1].textContent).join(',') === '0.98,0.82',
+  bothRows.map((tr) => tr.children[1].textContent).join(','))
+
+// A file with only a near-1.0 detection-style `score` still works, but the
+// warning has to make clear the values are not recognition confidences.
+paste('pixel-text', JSON.stringify({
+  type: 'FeatureCollection',
+  features: [1.0, 1.0, 1.0].map((score) => ({ type: 'Feature', properties: { text: 'x', score }, geometry: { type: 'Polygon', coordinates: box } }))
+}))
+check('all-1.0 scores flagged as rounded/unusable', /all exactly 1.*whole numbers only/.test($('pixel-status').textContent), $('pixel-status').textContent)
+
 console.log('\nTolerant parsing of a bare feature with a trailing comma')
 paste('pixel-text', '{"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [[[768.09, -759.38], [767.57, -794.02], [774.43, -792.60], [768.09, -759.38]]]}, "properties": {"text": "Diambour", "score": 0.98}},')
 check('single trailing-comma feature accepted', /1 features loaded/.test($('pixel-status').textContent), $('pixel-status').textContent)
@@ -158,7 +211,30 @@ check('download filenames', downloads.map((d) => d.name).join(',') ===
   'mapreader-latlong.csv,mapreader-latlong.geojson,mapreader-latlong-points.geojson',
   downloads.map((d) => d.name).join(','))
 
+console.log('\nScores are displayed and exported verbatim')
+const verbatim = {
+  type: 'FeatureCollection',
+  features: [0.98, 1, 0.9, 0.875].map((score, i) => ({
+    type: 'Feature',
+    properties: { text: 'label' + i, score },
+    geometry: { type: 'Polygon', coordinates: [[[300, -300], [340, -300], [340, -340], [300, -340], [300, -300]]] }
+  }))
+}
+paste('pixel-text', JSON.stringify(verbatim))
+$('score-number').value = '0'
+fire($('score-number'), 'input')
+$('run').click()
+await new Promise((resolve) => window.setTimeout(resolve, 200))
+const displayed = [...document.querySelectorAll('#table-body tr')].map((tr) => tr.children[1].textContent)
+check('no padding or rounding in the table', displayed.join(',') === '0.98,1,0.9,0.875', displayed.join(','))
+$('dl-csv').click()
+const csvScores = lastBlobText.trim().split('\n').slice(1).map((line) => line.split(',')[1])
+check('CSV carries the same values', csvScores.join(',') === '0.98,1,0.9,0.875', csvScores.join(','))
+
 console.log('\nText filter')
+paste('pixel-text', read('samples/mapreader-detections.example.geojson'))
+$('score-number').value = '0.5'
+fire($('score-number'), 'input')
 $('text-filter').value = 'palais'
 $('run').click()
 await new Promise((resolve) => window.setTimeout(resolve, 200))

@@ -28,6 +28,36 @@ loading tiles for the map preview.
      straight into QGIS.
    - **GeoJSON (label points)** — one point per detection, at the label centre.
 
+### Which score gets used
+
+Text-spotting pipelines often emit two confidences per detection: a **detection**
+score (is there text in this box?) and a **recognition** score (did I read the
+characters right?). The detection score sits close to 1.0 for almost every box
+that survives thresholding, so it is useless as a quality filter.
+
+The app therefore always prefers a recognition field — anything named like
+`rec_score`, `text_conf`, `ocr_confidence` — and only falls back to generic
+names (`score`, `confidence`, `prob`). Fields that look like detection scores
+are never filtered on, but they are kept as their own column so you can see
+them. The status line under the file input names the field it chose, its range,
+and how many distinct values it holds:
+
+```
+2,481 features loaded · 2,481 with a "rec_score" (range 0.12–0.99, 318 distinct
+values); not filtering on det_score — shown as its own column instead
+```
+
+Two warnings to watch for there:
+
+- **`all exactly 1`** or **`whole numbers only`** — the values were rounded away
+  upstream, so filtering cannot work. A GIS round-trip that typed the column as
+  an integer does this.
+- **`no recognition score found`** — no usable numeric field at all; every
+  detection is then treated as unscored.
+
+Scores are shown and exported exactly as they appear in the input file, with no
+rounding or padding, since that column is how you judge the data.
+
 ### The Y axis matters
 
 Allmaps resource coordinates are image pixels: origin top-left, Y growing
@@ -65,12 +95,15 @@ The repo is already a valid Pages site: static files, relative paths, and a
 `.nojekyll` file so Jekyll doesn't touch the `vendor/` bundle.
 
 ```sh
-gh repo create mapreader-georeferencer --public --source=. --push
+gh repo create davidrumseymapcenter/toponym-extractor --public --source=. --push
 ```
 
 Then in the repository: **Settings → Pages → Source: Deploy from a branch →
 `main` / `root`**. The site appears at
-`https://<user>.github.io/mapreader-georeferencer/` a minute later.
+<https://davidrumseymapcenter.github.io/toponym-extractor/> a minute later.
+
+Pages has to be public here: serving a site from a private repository requires
+a paid organisation plan.
 
 Pushing to `main` republishes it. Nothing needs to be built or installed on the
 Pages side.
