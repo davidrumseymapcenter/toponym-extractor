@@ -1,5 +1,5 @@
 /*
- * MapReader → lat/long
+ * Toponym Extractor
  *
  * Takes MapReader text detections whose coordinates are image pixels, plus an
  * Allmaps Georeference Annotation, and applies the annotation's ground control

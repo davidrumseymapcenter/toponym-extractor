@@ -30,7 +30,7 @@ virtualConsole.on('jsdomError', (err) => {
 
 const dom = new JSDOM(read('index.html'), {
   runScripts: 'dangerously',
-  url: 'https://example.org/mapreader-georeferencer/',
+  url: 'https://example.org/toponym-extractor/',
   virtualConsole,
   pretendToBeVisual: true,
   resources: undefined

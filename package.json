@@ -1,5 +1,5 @@
 {
-  "name": "mapreader-georeferencer",
+  "name": "toponym-extractor",
   "version": "1.0.0",
   "private": true,
   "description": "Browser app that turns MapReader pixel-coordinate GeoJSON into lat/long tables using an Allmaps Georeference Annotation.",

@@ -1,4 +1,4 @@
-# MapReader → lat/long
+# Toponym Extractor
 
 A static web app that turns [MapReader](https://github.com/Living-with-machines/MapReader)
 text detections — whose coordinates are **image pixels** — into a
