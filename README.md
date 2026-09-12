@@ -28,6 +28,31 @@ loading tiles for the map preview.
      straight into QGIS.
    - **GeoJSON (label points)** — one point per detection, at the label centre.
 
+### Accuracy depends on the georeferencing
+
+Every coordinate this app produces inherits the accuracy of the annotation it
+was given. The transformation is applied faithfully, but a loose or sparse set
+of ground control points yields confidently wrong lat/long, and nothing in the
+output looks any different from a good result.
+
+Two things are worth checking before trusting a batch:
+
+- **The fit of the control points.** In Allmaps Editor, GCPs placed roughly, or
+  clustered in one part of the sheet, leave the rest of the map unconstrained.
+  Errors grow with distance from the nearest control point.
+- **A few known locations.** Compare against a modern basemap using sharp
+  features — river confluences, coastal points — rather than place labels. A
+  label is a large object drawn *beside* its symbol, so on a sheet at, say,
+  0.24 km per pixel a label can be tens of kilometres wide; comparing its
+  centre to a town's true position measures cartographic convention as much as
+  georeferencing error.
+
+Transformation type is rarely the fix. With a modest number of GCPs the
+flexible options overfit: on a 12-GCP annotation tested here, leave-one-out
+cross-validation put `helmert` and `polynomial1` around 10–11 km mean error,
+while `polynomial3` reached 95 km. More or better-distributed control points
+help; a fancier transformation usually does not.
+
 ### Which score gets used
 
 Text-spotting pipelines often emit two confidences per detection: a **detection**

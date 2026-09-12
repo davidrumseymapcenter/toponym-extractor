@@ -165,9 +165,21 @@ check('identical scores do not filter everything out', [...document.querySelecto
   [...document.querySelectorAll('#table-body tr')].length)
 check('summary explains scores were unused', /scores in this file are all identical, so they were not used/.test($('summary').textContent), $('summary').textContent)
 
+check('card dimmed when scores are uniform', $('score-option').className.includes('inactive'), $('score-option').className)
+check('slider parked on the shared value', $('score-threshold').value === '1' && $('score-number').value === '1',
+  $('score-threshold').value + '/' + $('score-number').value)
+
+// Returning to a file with real scores must restore the chosen threshold,
+// not inherit the parked 1.
+paste('pixel-text', read('samples/mapreader-detections.example.geojson'))
+check('threshold restored on reactivation', $('score-number').value === '0.9', $('score-number').value)
+check('card undimmed again', !$('score-option').className.includes('inactive'), $('score-option').className)
+check('slider usable again', $('score-threshold').disabled === false)
+
 paste('pixel-text', JSON.stringify(noScore))
 check('slider disabled when there are no scores', $('score-threshold').disabled === true)
 check('no-score reason explained', /nothing to filter on/.test($('score-hint').textContent), $('score-hint').textContent)
+check('slider parked at zero when there is nothing to filter', $('score-threshold').value === '0', $('score-threshold').value)
 
 console.log('\nTolerant parsing of a bare feature with a trailing comma')
 paste('pixel-text', '{"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [[[768.09, -759.38], [767.57, -794.02], [774.43, -792.60], [768.09, -759.38]]]}, "properties": {"text": "Diambour", "score": 0.98}},')

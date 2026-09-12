@@ -34,6 +34,7 @@
     rows: null, // results of the last run
     sortKey: null,
     sortDir: 1,
+    userThreshold: 0.75, // survives files whose scores park the slider elsewhere
     columns: [],
     map: null
   }
@@ -470,35 +471,59 @@
     var hint = $('score-hint')
     var slider = $('score-threshold')
     var number = $('score-number')
+    var card = $('score-option')
     var stats = state.scoreStats
+    var wasActive = state.scoreFilterActive === true
 
-    if (!state.pixelFeatures || !stats) {
+    // Off: dim the heading and slider, leaving the hint legible so the reason
+    // is readable. The threshold is forced to 0 at conversion time, so the
+    // parked slider position never filters anything.
+    var deactivate = function (message, parkAt) {
       state.scoreFilterActive = false
       slider.disabled = number.disabled = true
-      hint.textContent = 'Detections scoring below this are left out of the results.'
+      card.classList.add('inactive')
+      if (parkAt !== undefined) {
+        var parked = Math.min(1, Math.max(0, parkAt))
+        slider.value = parked
+        number.value = parkAt
+      }
+      hint.textContent = message
+    }
+
+    if (!state.pixelFeatures || !stats) {
+      deactivate('Detections scoring below this are left out of the results.')
       return
     }
 
     if (!stats.count) {
-      state.scoreFilterActive = false
-      slider.disabled = number.disabled = true
-      hint.textContent = 'No scores in this file, so there is nothing to filter on. All ' +
-        stats.total.toLocaleString() + ' detections will be converted.'
+      deactivate('No scores in this file, so there is nothing to filter on. All ' +
+        stats.total.toLocaleString() + ' detections will be converted.', 0)
       return
     }
 
     if (stats.distinct === 1) {
-      state.scoreFilterActive = false
-      slider.disabled = number.disabled = true
-      hint.textContent = 'Every detection in this file scores exactly ' + stats.values[0] +
-        ', so filtering by score is switched off — this export carries no usable confidence values.'
+      // Park the slider on the value every detection shares, so the control
+      // reads as "nothing is being excluded" rather than sitting at a
+      // threshold it is not applying.
+      deactivate('Every detection in this file scores exactly ' + stats.values[0] +
+        ', so filtering by score is switched off — this export carries no usable confidence values.',
+      stats.values[0])
       return
     }
 
     state.scoreFilterActive = true
     slider.disabled = number.disabled = false
+    card.classList.remove('inactive')
+
+    // Coming back from a parked position, restore the threshold the user chose
+    // rather than inheriting the previous file's parked value.
+    if (!wasActive) {
+      slider.value = state.userThreshold
+      number.value = state.userThreshold
+    }
 
     var threshold = Number(number.value)
+    state.userThreshold = threshold
     var unscored = stats.total - stats.count
     var dropped = countBelow(stats.values, threshold) +
       ($('keep-unscored').checked ? 0 : unscored)

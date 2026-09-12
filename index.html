@@ -50,6 +50,12 @@ A bare list of features, one-per-line NDJSON, or a single feature also works.'><
       <textarea id="annotation-text" rows="3" spellcheck="false"
         placeholder="Or paste the annotation JSON here."></textarea>
       <p class="status" id="annotation-status">No annotation loaded.</p>
+      <p class="caveat">
+        Every coordinate below inherits the accuracy of this georeferencing.
+        Loosely placed or sparse ground control points produce confidently wrong
+        lat/long with nothing on screen to indicate it — check a few known
+        locations against a basemap before trusting the output.
+      </p>
     </div>
   </div>
 </section>
@@ -60,7 +66,7 @@ A bare list of features, one-per-line NDJSON, or a single feature also works.'><
 
   <div class="options">
 
-    <div class="option">
+    <div class="option" id="score-option">
       <label for="score-threshold">Minimum confidence score</label>
       <div class="slider-row">
         <input type="range" id="score-threshold" min="0" max="1" step="0.01" value="0.75">
