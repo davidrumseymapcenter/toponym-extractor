@@ -254,6 +254,13 @@
     return null
   }
 
+  // Strips diacritics so the text filter matches across spellings: these maps
+  // carry both "SEGOU" and "Ségouba", and a search for either should find both.
+  // Applied to the query and the text alike, so an accented query works too.
+  function foldAccents (text) {
+    return text.normalize ? text.normalize('NFD').replace(/[\u0300-\u036f]/g, '') : text
+  }
+
   function textOf (props) {
     var key = pickKey(props, TEXT_KEYS)
     return key ? String(props[key]) : ''
@@ -529,7 +536,7 @@
     // whose scores are all 0.5 would silently lose every row.
     var threshold = state.scoreFilterActive ? Number($('score-number').value) : 0
     var keepUnscored = $('keep-unscored').checked
-    var textNeedle = $('text-filter').value.trim().toLowerCase()
+    var textNeedle = foldAccents($('text-filter').value.trim().toLowerCase())
     var fullOutlines = $('full-outlines').checked
 
     var yMode = $('y-axis').value
@@ -551,7 +558,7 @@
     var candidates = state.pixelFeatures.filter(function (f) {
       var score = scoreOf(f.properties)
       if (score === null) { if (!keepUnscored) return false } else if (score < threshold) return false
-      if (textNeedle && textOf(f.properties).toLowerCase().indexOf(textNeedle) === -1) return false
+      if (textNeedle && foldAccents(textOf(f.properties).toLowerCase()).indexOf(textNeedle) === -1) return false
       return true
     })
 

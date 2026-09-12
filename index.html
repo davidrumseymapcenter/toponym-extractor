@@ -76,7 +76,11 @@ A bare list of features, one-per-line NDJSON, or a single feature also works.'><
     <div class="option">
       <label for="text-filter">Text contains (optional)</label>
       <input type="text" id="text-filter" placeholder="e.g. Diambour" spellcheck="false">
-      <p class="hint">Case-insensitive substring match on the transcribed text.</p>
+      <p class="hint">
+        Substring match anywhere in the transcribed text, ignoring case and
+        accents — <code>segou</code> finds both <em>SEGOU</em> and
+        <em>Ségouba</em>, and <code>bou</code> finds <em>Diambour</em>.
+      </p>
     </div>
 
     <div class="option">

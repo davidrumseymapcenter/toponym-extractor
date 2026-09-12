@@ -73,6 +73,15 @@ and says why, rather than appearing to filter while doing nothing. The stored
 threshold is not applied in that state, so a file whose scores were all `0.5`
 cannot silently lose every row.
 
+### The text filter
+
+A substring match anywhere in the transcription, ignoring both case and
+accents. `bou` finds `Diambour`, `Tombouctou` and `##Bouna`; `segou` finds
+`SEGOU`, `Segouro` and `Ségouba`, and so does `ségou`. Diacritics are stripped
+from the query and the text alike, which matters on these sheets: about 6% of
+detections carry accented characters, and the same place is spelled both ways
+across a corpus.
+
 ### The Y axis matters
 
 Allmaps resource coordinates are image pixels: origin top-left, Y growing

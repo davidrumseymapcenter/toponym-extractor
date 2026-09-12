@@ -269,6 +269,28 @@ check('only matching text remains', filtered.length === 1 && filtered[0].childre
   filtered.map((tr) => tr.children[0].textContent).join(','))
 $('text-filter').value = ''
 
+console.log('\nAccent-insensitive text search')
+const accents = {
+  type: 'FeatureCollection',
+  features: ['SEGOU', 'Ségouba', 'Segouro', 'Sénégal', 'Kayes'].map((text) => ({
+    type: 'Feature', properties: { text, score: 0.9 }, geometry: { type: 'Polygon', coordinates: box }
+  }))
+}
+paste('pixel-text', JSON.stringify(accents))
+$('score-number').value = '0'
+fire($('score-number'), 'input')
+const searchFor = async (needle) => {
+  $('text-filter').value = needle
+  $('run').click()
+  await new Promise((resolve) => window.setTimeout(resolve, 150))
+  return [...document.querySelectorAll('#table-body tr')].map((tr) => tr.children[0].textContent).sort().join(',')
+}
+check('unaccented query finds accented text', await searchFor('segou') === 'SEGOU,Segouro,Ségouba', await searchFor('segou'))
+check('accented query finds unaccented text', await searchFor('ségou') === 'SEGOU,Segouro,Ségouba', await searchFor('ségou'))
+check('case is still ignored', await searchFor('SÉNÉGAL') === 'Sénégal', await searchFor('SÉNÉGAL'))
+check('non-matching query returns nothing', await searchFor('zzz') === '', await searchFor('zzz'))
+$('text-filter').value = ''
+
 console.log('\nY-axis override')
 $('y-axis').value = 'down'
 $('run').click()
