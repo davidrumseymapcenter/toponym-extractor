@@ -138,24 +138,12 @@ Or, with a server:
 npm run serve   # http://localhost:8000
 ```
 
-## Deploy to GitHub Pages
+## Deploy
 
-The repo is already a valid Pages site: static files, relative paths, and a
-`.nojekyll` file so Jekyll doesn't touch the `vendor/` bundle.
-
-```sh
-gh repo create davidrumseymapcenter/toponym-extractor --public --source=. --push
-```
-
-Then in the repository: **Settings → Pages → Source: Deploy from a branch →
-`main` / `root`**. The site appears at
-<https://davidrumseymapcenter.github.io/toponym-extractor/> a minute later.
-
-Pages has to be public here: serving a site from a private repository requires
-a paid organisation plan.
-
-Pushing to `main` republishes it. Nothing needs to be built or installed on the
-Pages side.
+Pushing to `main` republishes <https://davidrumseymapcenter.github.io/toponym-extractor/>
+— GitHub Pages serves the files as they are, with no build step. The repo has
+to stay public: serving Pages from a private repository requires a paid
+organisation plan.
 
 ## Develop
 
