@@ -11,7 +11,7 @@
 
   var GcpTransformer = window.AllmapsTransform && window.AllmapsTransform.GcpTransformer
 
-  // Fields MapReader (and neighbouring tools) use for the transcription.
+  // Fields MapReader (and neighboring tools) use for the transcription.
   var TEXT_KEYS = ['text', 'transcription', 'label', 'name', 'word']
 
   // The score we filter on is the *recognition* confidence: how sure the model
@@ -28,7 +28,7 @@
   var CHUNK_SIZE = 200 // features transformed per animation frame
 
   var state = {
-    pixelFeatures: null, // normalised array of GeoJSON-ish features
+    pixelFeatures: null, // normalized array of GeoJSON-ish features
     pixelWarnings: [],
     annotation: null, // { gcps, transformationType, width, height, label }
     rows: null, // results of the last run
@@ -727,7 +727,7 @@
   function formatCell (row, column) {
     var value = column.display ? row[column.display] : cellValue(row, column)
     if (value === null || value === undefined || value === '') return '—'
-    // Only computed values (lat/long, pixel centres) are rounded for display.
+    // Only computed values (lat/long, pixel centers) are rounded for display.
     // Anything carried over from the input file is printed as-is.
     if (column.num && typeof value === 'number' && column.digits !== undefined) {
       return value.toFixed(column.digits)
