@@ -260,3 +260,18 @@ code {
   code { background: #262a30; }
   .card.dragover { background: #1b2a30; }
 }
+
+/* Source-image override, tucked into a disclosure so it stays out of the way
+   until the pixel spaces disagree. */
+#source-image-details {
+  margin-top: .75rem;
+  padding-top: .6rem;
+  border-top: 1px dashed var(--line);
+  font-size: .85rem;
+}
+#source-image-details summary { cursor: pointer; color: var(--accent); }
+#source-image-details[open] summary { margin-bottom: .4rem; }
+
+.dims-row { display: flex; align-items: center; gap: .4rem; margin: .5rem 0; }
+.dims-row input[type="number"] { width: 6rem; }
+.dims-row button { padding: .3rem .7rem; font-size: .8rem; }

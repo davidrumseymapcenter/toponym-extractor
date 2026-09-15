@@ -38,6 +38,7 @@
     annotation: null, // { gcps, transformationType, width, height, label }
     annotationRaw: null, // the annotation as parsed from the file, for the preview
     annotationUrl: null, // set when it came from a URL, so it can be reloaded
+    sourceImage: null, // { width, height, name } of the image the detections came from
     rows: null, // results of the last run
     settings: null, // options the last run used
     sortKey: null,
@@ -439,6 +440,95 @@
     return summary
   }
 
+  /* ── Source image and scaling ───────────────────────────────────────────── */
+
+  /*
+   * Pixel coordinates are meaningless without the image they were measured on.
+   * When MapReader ran on a different scan than the annotation georeferences,
+   * every coordinate is off by the ratio between them, and because the error
+   * grows with distance from the pixel origin it looks like a drift toward the
+   * top-left corner of the sheet rather than an obvious mistake.
+   *
+   * Only the width ratio is used, applied to both axes. Different scans are
+   * related by a uniform scale: heights can differ because one includes more
+   * margin, so scaling the axes independently stretches the geometry and does
+   * worse. A disagreement between the two ratios is reported instead, since it
+   * means the scans are also cropped differently and no scale fixes that fully.
+   */
+  function detectionScale () {
+    var source = state.sourceImage
+    var annotation = state.annotation
+    if (!source || !annotation || !annotation.width || !source.width) return 1
+    return annotation.width / source.width
+  }
+
+  function describeSourceImage () {
+    var status = $('source-image-status')
+    var source = state.sourceImage
+    var annotation = state.annotation
+
+    if (!source) {
+      setStatus(status, 'Assuming the same image as the annotation.')
+      return
+    }
+
+    var parts = [source.width + '×' + source.height + ' px' + (source.name ? ' (' + source.name + ')' : '')]
+
+    if (!annotation || !annotation.width) {
+      parts.push('load an annotation to compare')
+      setStatus(status, parts.join(' · '))
+      return
+    }
+
+    var scale = detectionScale()
+    if (Math.abs(scale - 1) < 0.001) {
+      parts.push('same size as the annotation image, no scaling needed')
+      setStatus(status, parts.join(' · '), 'ok')
+      return
+    }
+
+    parts.push('coordinates scaled ×' + scale.toFixed(4) + ' to match the annotation\'s ' +
+      annotation.width + '×' + annotation.height)
+
+    var heightRatio = annotation.height / source.height
+    if (Math.abs(heightRatio - scale) / scale > 0.01) {
+      parts.push('⚠ the two images have different proportions (' +
+        (source.width / source.height).toFixed(3) + ' vs ' +
+        (annotation.width / annotation.height).toFixed(3) +
+        '), so they are cropped differently as well as resized — the width ratio is used, and some error remains')
+    }
+    setStatus(status, parts.join(' · '), 'ok')
+  }
+
+  function setSourceImage (size, name) {
+    state.sourceImage = size ? { width: size.width, height: size.height, name: name } : null
+    $('source-width').value = size ? size.width : ''
+    $('source-height').value = size ? size.height : ''
+    describeSourceImage()
+  }
+
+  // Only the header is read, so the file size does not matter: map scans arrive
+  // as hundreds of megabytes and a browser cannot decode them at all.
+  function readImageHeader (file) {
+    setStatus($('source-image-status'), 'Reading ' + file.name + '…')
+    var slice = file.slice(0, 65536)
+    var reader = new FileReader()
+    reader.onload = function () {
+      var size = window.ImageSize && window.ImageSize.imageSize(reader.result)
+      if (!size) {
+        setStatus($('source-image-status'),
+          'Could not read the dimensions from ' + file.name +
+          '. JPEG, PNG, TIFF, GIF and WebP headers are understood — otherwise type the size.', 'error')
+        return
+      }
+      setSourceImage(size, file.name)
+    }
+    reader.onerror = function () {
+      setStatus($('source-image-status'), 'Could not read ' + file.name, 'error')
+    }
+    reader.readAsArrayBuffer(slice)
+  }
+
   /* ── Y-axis handling ────────────────────────────────────────────────────── */
 
   // Allmaps resource coordinates are image pixels: origin top-left, Y growing
@@ -522,6 +612,7 @@
       $('transformation-hint').textContent =
         'Leave as "From annotation" to use ' + a.transformationType + ', exactly as chosen in Allmaps Editor.'
       describeMask(a)
+      describeSourceImage()
     } catch (err) {
       state.annotation = null
       setStatus($('annotation-status'), err.message, 'error')
@@ -759,18 +850,23 @@
       return
     }
 
-    // The mask is in resource coordinates, so the detection's center has to be
-    // put in that same space — Y correction applied — before testing it.
     var mask = ($('use-mask').checked && !$('use-mask').disabled) ? state.annotation.mask : null
     var maskDropped = 0
+    var scale = detectionScale()
+
+    // A detection coordinate in the annotation's pixel space: scaled to the
+    // annotation's image, then corrected for the Y axis convention. The mask
+    // lives in that space too, so it has to be tested after both steps.
+    var toResource = function (point) {
+      return [Number(point[0]) * scale, correctY(Number(point[1]) * scale)]
+    }
 
     var candidates = state.pixelFeatures.filter(function (f) {
       var score = scoreOf(f.properties)
       if (score === null) { if (!keepUnscored) return false } else if (score < threshold) return false
       if (textNeedle && foldAccents(textOf(f.properties).toLowerCase()).indexOf(textNeedle) === -1) return false
       if (mask) {
-        var center = geometryCentroid(f.geometry)
-        if (!pointInPolygon([center[0], correctY(center[1])], mask)) {
+        if (!pointInPolygon(toResource(geometryCentroid(f.geometry)), mask)) {
           maskDropped++
           return false
         }
@@ -787,7 +883,7 @@
     setStatus($('run-status'), 'Converting ' + candidates.length.toLocaleString() + ' detections…')
 
     function toGeo (point) {
-      return transformer.transformToGeo([Number(point[0]), correctY(Number(point[1]))])
+      return transformer.transformToGeo(toResource(point))
     }
 
     function step () {
@@ -834,6 +930,7 @@
           scoreFiltered: state.scoreFilterActive,
           maskDropped: maskDropped,
           maskUsed: !!mask,
+          scale: scale,
           fullOutlines: fullOutlines
         })
       }
@@ -864,7 +961,9 @@
       total.toLocaleString() + '</strong> detections converted. ' +
       dropped.toLocaleString() + ' filtered out (' + reason +
       '). Transformation: <code>' + settings.transformationType + '</code>, ' +
-      state.annotation.gcps.length + ' GCPs, Y treated as ' +
+      state.annotation.gcps.length + ' GCPs, ' +
+      (Math.abs(settings.scale - 1) < 0.001 ? '' : 'coordinates scaled ×' + settings.scale.toFixed(4) + ', ') +
+      'Y treated as ' +
       (settings.yMode === 'negated' ? 'negative' : settings.yMode === 'up' ? 'upward' : 'downward') + '.'
     if (failures) summary += ' <strong>' + failures + '</strong> detections could not be transformed.'
     $('summary').innerHTML = summary
@@ -1278,6 +1377,24 @@
     $('fetch-annotation').addEventListener('click', function () {
       fetchAnnotation($('annotation-url').value.trim(), false)
     })
+    $('source-image-file').addEventListener('change', function (event) {
+      if (event.target.files[0]) readImageHeader(event.target.files[0])
+    })
+    var typedSize = function () {
+      var w = Number($('source-width').value)
+      var h = Number($('source-height').value)
+      if (w > 0 && h > 0) {
+        state.sourceImage = { width: w, height: h, name: null }
+        describeSourceImage()
+      }
+    }
+    $('source-width').addEventListener('change', typedSize)
+    $('source-height').addEventListener('change', typedSize)
+    $('source-clear').addEventListener('click', function () {
+      $('source-image-file').value = ''
+      setSourceImage(null)
+    })
+
     $('reload-annotation').addEventListener('click', function () {
       fetchAnnotation(state.annotationUrl, true)
     })

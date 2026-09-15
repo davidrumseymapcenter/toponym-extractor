@@ -39,7 +39,7 @@ const { window } = dom
 const document = window.document
 
 // jsdom serves no subresources, so inject the two scripts by hand.
-for (const src of ['vendor/allmaps-transform.js', 'app.js']) {
+for (const src of ['vendor/allmaps-transform.js', 'vendor/image-size.js', 'app.js']) {
   const script = document.createElement('script')
   script.textContent = read(src)
   document.body.appendChild(script)
@@ -349,6 +349,78 @@ check('run disabled after bad input', $('run').disabled === true)
  * (construction, opacity, layer toggling, failure handling) against a stub.
  * Whether tiles actually warp on screen has to be confirmed in a browser.
  */
+console.log('\nDetections measured on a different image')
+{
+  // Header-only dimension reading: a JPEG with a known size, built by hand.
+  const jpegHeader = (w, h) => {
+    const bytes = [0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, h >> 8, h & 0xff, w >> 8, w & 0xff, 0x03]
+    return new Uint8Array(bytes.concat(new Array(40).fill(0))).buffer
+  }
+  const size = window.ImageSize.imageSize(jpegHeader(9196, 7979))
+  check('JPEG header parsed', size && size.width === 9196 && size.height === 7979, JSON.stringify(size))
+  check('PNG header parsed', (() => {
+    const b = new Uint8Array(32); const v = new DataView(b.buffer)
+    v.setUint32(0, 0x89504e47); v.setUint32(16, 4708); v.setUint32(20, 1860)
+    const s = window.ImageSize.imageSize(b.buffer)
+    return s && s.width === 4708 && s.height === 1860
+  })())
+  check('TIFF header parsed', (() => {
+    const b = new Uint8Array(64); const v = new DataView(b.buffer)
+    v.setUint16(0, 0x4949, true); v.setUint16(2, 42, true); v.setUint32(4, 8, true)
+    v.setUint16(8, 2, true)
+    v.setUint16(10, 256, true); v.setUint16(12, 4, true); v.setUint32(14, 1, true); v.setUint32(18, 9196, true)
+    v.setUint16(22, 257, true); v.setUint16(24, 4, true); v.setUint32(26, 1, true); v.setUint32(30, 7979, true)
+    const s = window.ImageSize.imageSize(b.buffer)
+    return s && s.width === 9196 && s.height === 7979
+  })())
+  check('unknown format rejected', window.ImageSize.imageSize(new Uint8Array(40).buffer) === null)
+
+  // The real failure: detections from a 9196-wide scan, annotation on a
+  // 4708-wide image. Without correction everything drifts toward the origin.
+  paste('pixel-text', read('samples/mapreader-detections.example.geojson'))
+  paste('annotation-text', read('samples/annotation.example.json'))
+  $('score-number').value = '0'
+  fire($('score-number'), 'input')
+  $('use-mask').checked = false
+  $('run').click()
+  await new Promise((resolve) => window.setTimeout(resolve, 300))
+  const plainLat = Number(document.querySelectorAll('#table-body tr')[0].children[2].textContent)
+  const plainLon = Number(document.querySelectorAll('#table-body tr')[0].children[3].textContent)
+  check('no scaling by default', /GCPs, Y treated as/.test($('summary').textContent) &&
+    !/coordinates scaled/.test($('summary').textContent), $('summary').textContent)
+
+  $('source-width').value = '2354'
+  $('source-height').value = '930'
+  fire($('source-height'), 'change')
+  check('typed size accepted and scale reported', /coordinates scaled ×2\.0000 to match the annotation's 4708×1860/.test($('source-image-status').textContent),
+    $('source-image-status').textContent)
+  check('proportional images raise no warning', !/different proportions/.test($('source-image-status').textContent))
+
+  $('run').click()
+  await new Promise((resolve) => window.setTimeout(resolve, 300))
+  check('summary reports the scaling', /coordinates scaled ×2\.0000/.test($('summary').textContent), $('summary').textContent)
+  const scaledLat = Number(document.querySelectorAll('#table-body tr')[0].children[2].textContent)
+  const scaledLon = Number(document.querySelectorAll('#table-body tr')[0].children[3].textContent)
+  check('coordinates actually moved', Math.abs(scaledLat - plainLat) > 0.0005 || Math.abs(scaledLon - plainLon) > 0.0005,
+    `${plainLat},${plainLon} → ${scaledLat},${scaledLon}`)
+
+  // Disproportionate images are the case that cannot be fully corrected.
+  $('source-width').value = '9196'
+  $('source-height').value = '7979'
+  fire($('source-height'), 'change')
+  check('different proportions warned about', /different proportions \(1\.153 vs 2\.531\)/.test($('source-image-status').textContent),
+    $('source-image-status').textContent)
+  check('width ratio still used', /scaled ×0\.5120/.test($('source-image-status').textContent), $('source-image-status').textContent)
+
+  $('source-clear').click()
+  check('clearing restores the default assumption', /Assuming the same image as the annotation/.test($('source-image-status').textContent),
+    $('source-image-status').textContent)
+  $('run').click()
+  await new Promise((resolve) => window.setTimeout(resolve, 300))
+  check('unscaled again after clearing', !/coordinates scaled/.test($('summary').textContent), $('summary').textContent)
+  $('use-mask').checked = true
+}
+
 console.log('\nReloading the annotation from its URL')
 {
   // The workflow: review the results, fix the georeferencing in Allmaps Editor,
@@ -569,7 +641,7 @@ console.log('\nMap preview failure handling')
     runScripts: 'dangerously', url: 'https://example.org/', virtualConsole, pretendToBeVisual: true
   })
   const w = page.window
-  for (const src of ['vendor/allmaps-transform.js', 'app.js']) {
+  for (const src of ['vendor/allmaps-transform.js', 'vendor/image-size.js', 'app.js']) {
     const script = w.document.createElement('script')
     script.textContent = read(src)
     w.document.body.appendChild(script)

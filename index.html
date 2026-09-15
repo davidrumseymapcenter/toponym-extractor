@@ -36,6 +36,26 @@
 
 A bare list of features, one-per-line NDJSON, or a single feature also works.'></textarea>
       <p class="status" id="pixel-status">No detections loaded.</p>
+
+      <details id="source-image-details">
+        <summary>Measured on a different image?</summary>
+        <p class="hint">
+          Pixel coordinates only mean something against the image they were
+          measured on. If MapReader ran on a different scan or size than the one
+          the annotation georeferences, everything lands in the wrong place.
+          Drop that image here — only its header is read, so a 400 MB TIFF is
+          instant — or type its size.
+        </p>
+        <input type="file" id="source-image-file" accept="image/*,.tif,.tiff">
+        <div class="dims-row">
+          <input type="number" id="source-width" min="1" step="1" placeholder="width">
+          <span>×</span>
+          <input type="number" id="source-height" min="1" step="1" placeholder="height">
+          <span>px</span>
+          <button type="button" id="source-clear" class="secondary">Clear</button>
+        </div>
+        <p class="status" id="source-image-status">Assuming the same image as the annotation.</p>
+      </details>
     </div>
 
     <div class="card drop" id="drop-annotation">
@@ -198,6 +218,7 @@ A bare list of features, one-per-line NDJSON, or a single feature also works.'><
 </footer>
 
 <script src="./vendor/allmaps-transform.js"></script>
+<script src="./vendor/image-size.js"></script>
 <script src="./app.js"></script>
 </body>
 </html>

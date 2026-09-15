@@ -130,6 +130,46 @@ bypassing the cache: none worth noting, about a second either way.
 If the map preview is open it is rebuilt around the new control points, so the
 overlay moves as the georeferencing changes.
 
+### When the detections came from a different image
+
+Pixel coordinates only mean something against the image they were measured on.
+Run MapReader on one scan and georeference another, and every coordinate is off
+by the ratio between them — with no error, because the numbers are all still
+inside the image bounds. The displacement grows with distance from the pixel
+origin, so it reads as a drift toward the top-left corner of the sheet.
+
+A real example: detections from a David Rumsey scan (9196 × 7979) against an
+annotation georeferencing the Internet Archive scan (11030 × 8974) put every
+toponym about 16 km west and 9 km north. Supplying the source image size fixed
+it:
+
+| | mean error at four verified towns |
+| --- | --- |
+| uncorrected | 19.3 km |
+| scaled by the width ratio (×1.1994) | 3.0 km |
+
+3.0 km is the floor here — that annotation's own GCP misfit is ~3.3 km mean.
+
+Open **Measured on a different image?** under the detections and either drop the
+image or type its size. Dropping it reads only the header, so dimensions come
+back instantly even from a 400 MB TIFF that no browser could decode; JPEG, PNG,
+TIFF, GIF and WebP are understood.
+
+**Only the width ratio is applied, to both axes.** Different renditions of one
+scan are related by a uniform scale, and scaling the axes independently would
+shear the geometry. When the two images have different proportions — as above,
+1.153 against 1.229 — they are cropped differently as well as resized, no single
+scale is exact, and the app says so. Fitting scale *and* offset freely to those
+four towns landed on ×1.1799 with offsets of 11 and −32 pixels, so the crop
+difference is almost entirely extra bottom margin rather than a shifted origin.
+
+The app cannot detect this on its own: your GeoJSON carries only `text` and
+`score`, nothing about the source image. A bounds check would not have caught
+the example above (the coordinates span just 74% × 85% of the annotation's
+image), and choosing the scale that best fits the mask is no help either — 47%
+of detections fell outside the mask at the wrong scale and 48% at the right one,
+because the margin index table dominates.
+
 ### Trimming to the Allmaps mask
 
 The annotation carries the polygon drawn in Allmaps Editor around the

@@ -10,7 +10,8 @@ import { JSDOM, VirtualConsole } from 'jsdom'
 
 const BUNDLES = [
   { file: 'vendor/allmaps-transform.js', global: 'AllmapsTransform', expect: ['GcpTransformer'] },
-  { file: 'vendor/allmaps-leaflet.js', global: 'AllmapsLeaflet', expect: ['WarpedMapLayer', 'L'] }
+  { file: 'vendor/allmaps-leaflet.js', global: 'AllmapsLeaflet', expect: ['WarpedMapLayer', 'L'] },
+  { file: 'vendor/image-size.js', global: 'ImageSize', expect: ['imageSize'] }
 ]
 
 let failed = false
