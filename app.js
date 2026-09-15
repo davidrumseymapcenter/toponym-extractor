@@ -37,6 +37,7 @@
     scoreFilterActive: false,
     annotation: null, // { gcps, transformationType, width, height, label }
     annotationRaw: null, // the annotation as parsed from the file, for the preview
+    annotationUrl: null, // set when it came from a URL, so it can be reloaded
     rows: null, // results of the last run
     settings: null, // options the last run used
     sortKey: null,
@@ -501,6 +502,7 @@
   }
 
   function loadAnnotation (text, origin) {
+    var previous = state.annotation
     try {
       var parsed = parseLooseJson(text)
       var maps = parseAnnotation(parsed)
@@ -514,6 +516,8 @@
       if (a.width && a.height) parts.push('image ' + a.width + '×' + a.height + ' px')
       if (maps.length > 1) parts.push('note: file holds ' + maps.length + ' maps, using the first')
       if (origin) parts.push('from ' + origin)
+      var changes = previous ? describeAnnotationChange(previous, a) : null
+      if (changes) parts.push(changes)
       setStatus($('annotation-status'), parts.join(' · '), 'ok')
       $('transformation-hint').textContent =
         'Leave as "From annotation" to use ' + a.transformationType + ', exactly as chosen in Allmaps Editor.'
@@ -523,6 +527,39 @@
       setStatus($('annotation-status'), err.message, 'error')
     }
     refreshRunButton()
+    refreshControls()
+  }
+
+  // What changed between two versions of the same annotation. The point of
+  // reloading is usually to check that an edit in Allmaps Editor took effect,
+  // so saying what moved beats a status line that looks identical either way.
+  function describeAnnotationChange (before, after) {
+    var notes = []
+    if (before.gcps.length !== after.gcps.length) {
+      notes.push('control points ' + before.gcps.length + ' → ' + after.gcps.length)
+    }
+    if (before.transformationType !== after.transformationType) {
+      notes.push('transformation ' + before.transformationType + ' → ' + after.transformationType)
+    }
+    var coverage = function (annotation) {
+      if (!annotation.mask || !annotation.width || !annotation.height) return null
+      return polygonArea(annotation.mask) / (annotation.width * annotation.height)
+    }
+    var wasCovering = coverage(before)
+    var nowCovering = coverage(after)
+    if (wasCovering === null && nowCovering !== null) {
+      notes.push('mask added, covering ' + Math.round(nowCovering * 100) + '%')
+    } else if (wasCovering !== null && nowCovering === null) {
+      notes.push('mask removed')
+    } else if (wasCovering !== null && Math.abs(wasCovering - nowCovering) > 0.005) {
+      notes.push('mask coverage ' + Math.round(wasCovering * 100) + '% → ' + Math.round(nowCovering * 100) + '%')
+    }
+    return notes.length ? 'changed: ' + notes.join(', ') : 'unchanged from the previous version'
+  }
+
+  // The reload button only makes sense once an annotation came from a URL.
+  function refreshControls () {
+    $('reload-annotation').hidden = !state.annotationUrl
   }
 
   // Describes what the threshold will actually do to the loaded file, and turns
@@ -637,6 +674,56 @@
     } else {
       setStatus($('run-status'), 'Load both inputs to continue.')
     }
+  }
+
+  /*
+   * Fetching an annotation, and re-fetching it after an edit in Allmaps Editor.
+   *
+   * annotations.allmaps.org sits behind a CDN with `s-maxage=300,
+   * stale-while-revalidate=3600`, so a plain re-fetch can return an annotation
+   * up to five minutes old — exactly wrong when the point is to see an edit you
+   * just made. A cache-busting parameter plus `no-store` gets the current one.
+   */
+  function fetchAnnotation (url, isReload) {
+    if (!url) return
+
+    var target = url + (url.indexOf('?') === -1 ? '?' : '&') + '_=' + Date.now()
+    setStatus($('annotation-status'), isReload ? 'Reloading…' : 'Fetching…')
+    $('reload-annotation').disabled = true
+
+    window.fetch(target, { cache: 'no-store' })
+      .then(function (response) {
+        if (!response.ok) throw new Error('HTTP ' + response.status)
+        return response.text()
+      })
+      .then(function (text) {
+        state.annotationUrl = url
+        loadAnnotation(text, isReload ? 'reloaded URL' : 'URL')
+        if (state.annotation) applyNewAnnotation()
+      })
+      .catch(function (err) {
+        setStatus($('annotation-status'), (isReload ? 'Could not reload' : 'Could not fetch') +
+          ' that URL (' + err.message + '). Download the annotation and load the file instead.', 'error')
+      })
+      .then(function () {
+        $('reload-annotation').disabled = false
+        refreshControls()
+      })
+  }
+
+  // Everything downstream of a new annotation: the open preview has to be
+  // rebuilt around the new GCPs and mask, and results already on screen were
+  // computed with the old ones.
+  function applyNewAnnotation () {
+    if (state.map) {
+      if (state.warped) {
+        state.map.removeLayer(state.warped)
+        state.warped = null
+      }
+      $('map-opacity').disabled = false
+      addWarpedMap()
+    }
+    if (state.rows) run()
   }
 
   function readFile (file, onText) {
@@ -1090,13 +1177,16 @@
    */
   function watchForTiles () {
     var arrived = false
-    state.map.on('firstmaptileloaded', function () {
+    var generation = (state.tileWatch || 0) + 1
+    state.tileWatch = generation
+
+    state.map.once('firstmaptileloaded', function () {
       arrived = true
-      $('map-status').hidden = true
+      if (state.tileWatch === generation) $('map-status').hidden = true
     })
 
     window.setTimeout(function () {
-      if (arrived || !state.warped) return
+      if (arrived || !state.warped || state.tileWatch !== generation) return
       var host = state.annotation && state.annotation.label
       try { host = new URL(host).host } catch (e) { host = 'its IIIF image service' }
       setStatus($('map-status'),
@@ -1186,19 +1276,10 @@
     wireDropZone($('drop-annotation'), loadAnnotation)
 
     $('fetch-annotation').addEventListener('click', function () {
-      var url = $('annotation-url').value.trim()
-      if (!url) return
-      setStatus($('annotation-status'), 'Fetching…')
-      window.fetch(url)
-        .then(function (response) {
-          if (!response.ok) throw new Error('HTTP ' + response.status)
-          return response.text()
-        })
-        .then(function (text) { loadAnnotation(text, 'URL') })
-        .catch(function (err) {
-          setStatus($('annotation-status'),
-            'Could not fetch that URL (' + err.message + '). Download the annotation and load the file instead.', 'error')
-        })
+      fetchAnnotation($('annotation-url').value.trim(), false)
+    })
+    $('reload-annotation').addEventListener('click', function () {
+      fetchAnnotation(state.annotationUrl, true)
     })
 
     var slider = $('score-threshold')

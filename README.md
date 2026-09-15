@@ -99,6 +99,37 @@ and says why, rather than appearing to filter while doing nothing. The stored
 threshold is not applied in that state, so a file whose scores were all `0.5`
 cannot silently lose every row.
 
+### Reloading the annotation after an edit
+
+Reviewing the output often shows the georeferencing needs work — control points
+to add, or a mask to draw. **Reload annotation**, next to the downloads,
+re-fetches the annotation from its URL and converts again without touching the
+loaded detections. The loop is: convert, review, fix it in Allmaps Editor, save,
+reload.
+
+It appears once an annotation has been loaded from a URL (paste the
+`annotations.allmaps.org/…` address and press Fetch). A file-loaded annotation
+cannot be re-read without picking the file again, so the button stays hidden.
+
+The status line reports what changed, because a reload that did nothing looks
+exactly like one that worked:
+
+```
+12 ground control points · transformation: polynomial1 · image 8952×6840 px ·
+from reloaded URL · changed: control points 4 → 5, mask added, covering 68%
+```
+
+or `unchanged from the previous version` when the edit did not land.
+
+Requests carry a cache-busting parameter and `no-store`. Without it,
+`annotations.allmaps.org` serves `s-maxage=300, stale-while-revalidate=3600`
+through its CDN, so a reload could return an annotation up to five minutes old —
+which would look exactly like an edit that failed to save. Measured cost of
+bypassing the cache: none worth noting, about a second either way.
+
+If the map preview is open it is rebuilt around the new control points, so the
+overlay moves as the georeferencing changes.
+
 ### Trimming to the Allmaps mask
 
 The annotation carries the polygon drawn in Allmaps Editor around the

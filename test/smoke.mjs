@@ -349,6 +349,89 @@ check('run disabled after bad input', $('run').disabled === true)
  * (construction, opacity, layer toggling, failure handling) against a stub.
  * Whether tiles actually warp on screen has to be confirmed in a browser.
  */
+console.log('\nReloading the annotation from its URL')
+{
+  // The workflow: review the results, fix the georeferencing in Allmaps Editor,
+  // reload the annotation without touching the loaded detections.
+  const noMaskVersion = JSON.parse(read('samples/annotation.example.json'))
+  delete noMaskVersion.target.selector
+  const maskedVersion = JSON.parse(read('samples/annotation.example.json'))
+  // A mask drawn tighter than the sheet, excluding the left-hand column of the
+  // sample detections (x = 300) so the trim is observable.
+  maskedVersion.target.selector.value =
+    '<svg width="4708" height="1860"><polygon points="1000,100 1000,1500 4600,1500 4600,100" /></svg>'
+  maskedVersion.body.features.push({
+    type: 'Feature',
+    properties: { resourceCoords: [2000, 900] },
+    geometry: { type: 'Point', coordinates: [2.2925, 48.8602] }
+  })
+
+  const fetched = []
+  let serve = noMaskVersion
+  window.fetch = (url, options) => {
+    fetched.push({ url, cache: options?.cache })
+    return Promise.resolve({ ok: true, text: () => Promise.resolve(JSON.stringify(serve)) })
+  }
+
+  paste('pixel-text', read('samples/mapreader-detections.example.geojson'))
+  $('annotation-url').value = 'https://annotations.allmaps.org/maps/abc123'
+  $('fetch-annotation').click()
+  await new Promise((resolve) => window.setTimeout(resolve, 60))
+
+  check('fetch bypasses the CDN cache', /_=\d+/.test(fetched[0].url) && fetched[0].cache === 'no-store',
+    JSON.stringify(fetched[0]))
+  check('annotation loaded from URL', /4 ground control points/.test($('annotation-status').textContent),
+    $('annotation-status').textContent)
+  check('reload button revealed', $('reload-annotation').hidden === false)
+  check('no mask yet', $('use-mask').disabled === true, $('mask-hint').textContent)
+
+  $('score-number').value = '0'
+  fire($('score-number'), 'input')
+  $('run').click()
+  await new Promise((resolve) => window.setTimeout(resolve, 200))
+  const before = [...document.querySelectorAll('#table-body tr')].length
+  check('results exist before reloading', before === 12, before)
+
+  // Now the Editor has been used: a mask and an extra control point.
+  serve = maskedVersion
+  $('reload-annotation').click()
+  await new Promise((resolve) => window.setTimeout(resolve, 300))
+
+  check('reload re-fetched the same URL', fetched.length === 2 &&
+    fetched[1].url.split('?')[0] === 'https://annotations.allmaps.org/maps/abc123', JSON.stringify(fetched[1]))
+  check('each request gets a fresh cache-buster', fetched[0].url !== fetched[1].url)
+  check('reload reported as such', /from reloaded URL/.test($('annotation-status').textContent),
+    $('annotation-status').textContent)
+  check('changes summarized', /changed: control points 4 → 5, mask added, covering \d+%/.test($('annotation-status').textContent),
+    $('annotation-status').textContent)
+  check('mask control now live', $('use-mask').disabled === false)
+  check('detections were not reloaded', /12 features loaded/.test($('pixel-status').textContent),
+    $('pixel-status').textContent)
+  check('conversion re-ran against the new annotation', /5 GCPs/.test($('summary').textContent),
+    $('summary').textContent.replace(/\s+/g, ' '))
+  const after = [...document.querySelectorAll('#table-body tr')].length
+  check('the new mask trimmed the results', after === 10, before + ' → ' + after)
+  check('the trim is attributed to the mask', /2 outside the Allmaps mask/.test($('summary').textContent),
+    $('summary').textContent.replace(/\s+/g, ' '))
+
+  // An unchanged annotation should say so rather than imply an edit landed.
+  $('reload-annotation').click()
+  await new Promise((resolve) => window.setTimeout(resolve, 300))
+  check('unchanged reload says unchanged', /unchanged from the previous version/.test($('annotation-status').textContent),
+    $('annotation-status').textContent)
+
+  // A failed reload must leave the working annotation in place.
+  window.fetch = () => Promise.resolve({ ok: false, status: 503 })
+  $('reload-annotation').click()
+  await new Promise((resolve) => window.setTimeout(resolve, 200))
+  check('failed reload explained', /Could not reload that URL \(HTTP 503\)/.test($('annotation-status').textContent),
+    $('annotation-status').textContent)
+  check('reload button still usable', $('reload-annotation').disabled === false)
+  check('previous results survive a failed reload',
+    [...document.querySelectorAll('#table-body tr')].length === after,
+    [...document.querySelectorAll('#table-body tr')].length)
+}
+
 console.log('\nAllmaps mask trimming')
 // The sample annotation's mask is a quadrilateral inset from the edges:
 // points="117,120 113,1776 4587,1772 4568,101" on a 4708x1860 image.
@@ -410,6 +493,7 @@ function stubViewer ({ throwOnConstruct = false } = {}) {
     fitBounds: () => { calls.fitted++ },
     removeLayer: (l) => { calls.removed.push(l.__name) },
     on: (name) => { calls.events.push(name) },
+    once: (name) => { calls.events.push(name) },
     addLayer: (l) => { calls.added.push(l.__name) }
   }
   const layer = (name) => ({ __name: name, addTo (m) { m.addLayer(this); return this } })
@@ -497,7 +581,7 @@ console.log('\nMap preview failure handling')
   const added = []
   const mapObj = {
     setView: () => mapObj, invalidateSize: () => {}, fitBounds: () => {},
-    removeLayer: () => {}, addLayer: (l) => added.push(l.__name), on: () => {}
+    removeLayer: () => {}, addLayer: (l) => added.push(l.__name), on: () => {}, once: () => {}
   }
   const layer = (name) => ({ __name: name, addTo (m) { m.addLayer(this); return this } })
   w.AllmapsLeaflet = {
