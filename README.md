@@ -21,11 +21,14 @@ loading tiles for the map preview.
    text-recognition stage is about the transcription, from 0 to 1. Detections
    below the threshold are dropped before anything is transformed.
 4. **Convert**, then download:
-   - **CSV** — one row per detection: text, score, label centre lat/long, pixel
-     centre, vertex count, any other MapReader properties, and the full outline
+   - **CSV** — one row per detection: text, score, label center lat/long, pixel
+     center, vertex count, any other MapReader properties, and the full outline
      as WKT.
    - **GeoJSON (outlines)** — every polygon vertex transformed to WGS84. Compatible with QGIS.
    - **GeoJSON (label points)** — one point per detection, at the label center.
+5. **Show map preview** to see the historical map itself, warped live from its
+   IIIF tiles, with the detections on top and a slider to fade it against the
+   basemap.
 
 ### Accuracy depends on the georeferencing
 
@@ -96,6 +99,50 @@ and says why, rather than appearing to filter while doing nothing. The stored
 threshold is not applied in that state, so a file whose scores were all `0.5`
 cannot silently lose every row.
 
+### Trimming to the Allmaps mask
+
+The annotation carries the polygon drawn in Allmaps Editor around the
+cartographic area, as an `SvgSelector` in resource coordinates. With **Discard
+detections outside the mask** ticked — the default — any detection whose center
+falls outside that polygon is dropped before transformation, which removes
+titles, legends, imprints and credits.
+
+Two things to know:
+
+- A mask that traces the whole sheet trims nothing. That is what Allmaps stores
+  when nobody adjusted it, and the app says so: *"4-point mask covering 100% of
+  the image — it traces the whole sheet"*. To benefit, draw the mask around the
+  map area in the Editor.
+- The test is on the label's center, not its whole outline, so a label
+  straddling the neatline is kept or dropped as a whole.
+
+If the Y axis setting is wrong, every center lands outside the mask and
+everything is discarded — a loud signal that the axis, not the mask, is the
+problem.
+
+### Seeing the historical map
+
+The preview renders the map itself with
+[@allmaps/leaflet](https://github.com/allmaps/allmaps/tree/main/packages/leaflet),
+warping its IIIF tiles in WebGL2 using the same annotation that produced the
+coordinates. The slider fades it from 100% to 0% against OpenStreetMap, which is
+the quickest way to judge a georeference: misplaced control points are obvious
+the moment the coastline does not line up.
+
+This is the one feature that needs the image service to be reachable. It also
+needs WebGL2, and the viewer bundle (about a megabyte) is loaded only when the
+preview is first opened.
+
+**Not every IIIF server serves tiles.** David Rumsey's LUNA returns `info.json`
+instantly but currently times out on region requests, which leaves a blank
+overlay; the app waits 15 seconds for a first tile and then says which host went
+quiet. Internet Archive-hosted maps (`iiif.archive.org`) render fine. Nothing
+about the coordinates, table or downloads depends on this.
+
+Note the committed `samples/annotation.example.json` points at
+`iiif.archivelab.org`, which no longer resolves — the sample exercises the
+math, not the overlay.
+
 ### The text filter
 
 A substring match anywhere in the transcription, ignoring both case and
@@ -153,14 +200,33 @@ npm test        # end-to-end smoke test in jsdom
 `window.AllmapsTransform.GcpTransformer`. It is committed on purpose — the
 deployed site has no build step, and the app keeps working offline.
 
-`npm test` loads `index.html` in jsdom, drives the real UI controls with the
-sample files, and checks the table, the score filter, sorting, the Y-axis
-handling and all three downloads. Re-run it after changing `app.js`.
+`npm test` first verifies the vendor bundles actually execute and export what
+the app expects, then loads `index.html` in jsdom and drives the real UI
+controls, checking the table, the score filter, the mask trimming, sorting, the
+Y-axis handling, all three downloads, and the map preview's wiring.
+
+The vendor check exists because a bundle can build cleanly and still throw on
+load: `@allmaps/annotation`'s schemas break under zod >= 4.5, which silently
+produced a one-megabyte file that exported nothing. `overrides.zod` in
+`package.json` pins 4.4.3, the last version that works — note that 4.4.6 does
+not exist on npm, so a bad pin fails open and leaves whatever was installed.
+
+jsdom has no WebGL, so `npm test` can only cover the wiring around the warped
+map layer. To confirm the map actually draws:
+
+```sh
+npm run serve          # in one terminal
+npm run check:browser  # drives headless Chrome, writes PNGs to /tmp
+```
+
+That harness measures the map region's brightness at 100% and 0% opacity: no
+change means the overlay drew nothing. Point it at other data with
+`PIXELS_URL=` and `ANNOTATION_URL=`.
 
 Note: `@allmaps/annotation` is deliberately **not** a dependency. Its current
 beta throws on load with recent `zod` versions, and the annotation format is
 small enough to parse directly (see `parseAnnotation` in `app.js`), which also
-keeps the bundle to the transform maths alone.
+keeps the bundle to the transform math alone.
 
 ## Files
 
@@ -168,6 +234,10 @@ keeps the bundle to the transform maths alone.
 | --- | --- |
 | `index.html`, `styles.css`, `app.js` | the app |
 | `vendor/allmaps-transform.js` | bundled `@allmaps/transform` (generated, committed) |
-| `build/entry.js` | bundle entry point |
+| `vendor/allmaps-leaflet.js` | bundled `@allmaps/leaflet` + Leaflet, loaded on demand |
+| `vendor/leaflet.css` | Leaflet's stylesheet, copied from the package |
+| `build/entry.js`, `build/leaflet-entry.js` | bundle entry points |
 | `samples/` | example annotation + MapReader detections with negative Y |
 | `test/smoke.mjs` | jsdom end-to-end test |
+| `test/vendor-check.mjs` | asserts the vendor bundles load and export |
+| `test/browser-check.mjs` | real-Chrome visual check of the map overlay |

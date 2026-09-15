@@ -66,6 +66,19 @@ A bare list of features, one-per-line NDJSON, or a single feature also works.'><
 
   <div class="options">
 
+    <div class="option" id="mask-option">
+      <label for="use-mask">Allmaps mask</label>
+      <label class="check">
+        <input type="checkbox" id="use-mask" checked>
+        Discard detections outside the mask
+      </label>
+      <p class="hint" id="mask-hint">
+        The mask is the polygon drawn in Allmaps Editor around the cartographic
+        area of the sheet. Text in the margins — titles, legends, imprints,
+        credits — falls outside it.
+      </p>
+    </div>
+
     <div class="option" id="score-option">
       <label for="score-threshold">Minimum confidence score</label>
       <div class="slider-row">
@@ -149,6 +162,17 @@ A bare list of features, one-per-line NDJSON, or a single feature also works.'><
   </div>
 
   <p class="status" id="map-status" hidden></p>
+
+  <div class="map-controls" id="map-controls" hidden>
+    <label for="map-opacity">Historical map</label>
+    <input type="range" id="map-opacity" min="0" max="100" step="1" value="100">
+    <span id="map-opacity-value">100%</span>
+    <label class="check">
+      <input type="checkbox" id="show-detections" checked>
+      Show detections
+    </label>
+  </div>
+
   <div id="map" hidden></div>
 
   <div class="table-wrap">
@@ -164,7 +188,7 @@ A bare list of features, one-per-line NDJSON, or a single feature also works.'><
 
 <footer>
   <p>
-    Georeferencing maths by
+    Georeferencing math by
     <a href="https://github.com/allmaps/allmaps/tree/main/packages/transform">@allmaps/transform</a>,
     bundled locally. Confidence scores come from the text-recognition stage of
     <a href="https://github.com/Living-with-machines/MapReader">MapReader</a>.

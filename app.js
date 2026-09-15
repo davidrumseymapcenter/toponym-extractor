@@ -25,18 +25,28 @@
   var SCORE_KEYS = ['score', 'confidence', 'prob']
 
   var MAX_TABLE_ROWS = 1000
+  var TILE_WAIT = 15000 // ms to wait for the first IIIF tile before complaining
   var CHUNK_SIZE = 200 // features transformed per animation frame
 
   var state = {
     pixelFeatures: null, // normalized array of GeoJSON-ish features
     pixelWarnings: [],
+    scoreStats: null, // { values, count, total, distinct, min, max, median }
+    scoreKey: null, // property the score was read from
+    textKey: null, // property the transcription was read from
+    scoreFilterActive: false,
     annotation: null, // { gcps, transformationType, width, height, label }
+    annotationRaw: null, // the annotation as parsed from the file, for the preview
     rows: null, // results of the last run
+    settings: null, // options the last run used
     sortKey: null,
+    sortColumn: null,
     sortDir: 1,
     userThreshold: 0.75, // survives files whose scores park the slider elsewhere
     columns: [],
-    map: null
+    map: null,
+    warped: null, // WarpedMapLayer showing the historical map itself
+    markers: null // layer group of detection points
   }
 
   var $ = function (id) { return document.getElementById(id) }
@@ -68,7 +78,7 @@
     throw new Error('This does not look like JSON or GeoJSON.')
   }
 
-  function normaliseFeatures (parsed) {
+  function normalizeFeatures (parsed) {
     var warnings = []
     var raw
 
@@ -151,10 +161,30 @@
     return {
       gcps: gcps,
       transformationType: transformationTypeOf(body.transformation),
+      mask: parseSvgMask(item.target && item.target.selector),
       width: source.width,
       height: source.height,
       label: source.id || item.id || 'annotation'
     }
+  }
+
+  // The resource mask: the polygon drawn in Allmaps Editor around the
+  // cartographic area of the sheet, stored as an SvgSelector on the target and
+  // expressed in resource (pixel) coordinates. Numbers are pulled out in order
+  // and paired, which tolerates any of the separator conventions SVG allows.
+  function parseSvgMask (selector) {
+    if (!selector || !selector.value) return null
+    var match = /<polygon[^>]*\bpoints\s*=\s*"([^"]+)"/i.exec(selector.value)
+    if (!match) return null
+
+    var numbers = match[1].match(/-?\d+(?:\.\d+)?/g)
+    if (!numbers || numbers.length < 6) return null
+
+    var points = []
+    for (var i = 0; i + 1 < numbers.length; i += 2) {
+      points.push([Number(numbers[i]), Number(numbers[i + 1])])
+    }
+    return points.length >= 3 ? points : null
   }
 
   // Allmaps stores the polynomial order separately; @allmaps/transform wants it
@@ -231,6 +261,32 @@
     return meanPoint(collectPoints(coords))
   }
 
+  // Ray casting. Points exactly on an edge are not guaranteed either way,
+  // which is immaterial for label centroids.
+  function pointInPolygon (point, polygon) {
+    var x = point[0]
+    var y = point[1]
+    var inside = false
+    for (var i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+      var xi = polygon[i][0]
+      var yi = polygon[i][1]
+      var xj = polygon[j][0]
+      var yj = polygon[j][1]
+      if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
+        inside = !inside
+      }
+    }
+    return inside
+  }
+
+  function polygonArea (polygon) {
+    var sum = 0
+    for (var i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+      sum += (polygon[j][0] * polygon[i][1]) - (polygon[i][0] * polygon[j][1])
+    }
+    return Math.abs(sum / 2)
+  }
+
   function wkt (geometry) {
     var fmt = function (p) { return p[0] + ' ' + p[1] }
     var ring = function (r) { return '(' + r.map(fmt).join(', ') + ')' }
@@ -269,7 +325,7 @@
 
   // Sorted score values plus the summary the slider needs. Kept on state so
   // moving the slider can report its effect without rescanning the features.
-  function summariseScores (features) {
+  function summarizeScores (features) {
     var values = []
     features.forEach(function (f) {
       var score = scoreOf(f.properties)
@@ -420,10 +476,10 @@
 
   function loadPixels (text, origin) {
     try {
-      var result = normaliseFeatures(parseLooseJson(text))
+      var result = normalizeFeatures(parseLooseJson(text))
       state.pixelFeatures = result.features
       state.pixelWarnings = result.warnings
-      state.scoreStats = summariseScores(result.features)
+      state.scoreStats = summarizeScores(result.features)
       state.scoreKey = firstKeyFound(result.features, pickScoreKey)
       state.textKey = firstKeyFound(result.features, function (props) {
         return pickKey(props, TEXT_KEYS)
@@ -446,8 +502,12 @@
 
   function loadAnnotation (text, origin) {
     try {
-      var maps = parseAnnotation(parseLooseJson(text))
+      var parsed = parseLooseJson(text)
+      var maps = parseAnnotation(parsed)
       state.annotation = maps[0]
+      // Kept verbatim for the map preview: @allmaps/leaflet wants the original
+      // annotation, not our reduced form.
+      state.annotationRaw = parsed
       var a = state.annotation
       var parts = [a.gcps.length + ' ground control points']
       parts.push('transformation: ' + a.transformationType)
@@ -457,6 +517,7 @@
       setStatus($('annotation-status'), parts.join(' · '), 'ok')
       $('transformation-hint').textContent =
         'Leave as "From annotation" to use ' + a.transformationType + ', exactly as chosen in Allmaps Editor.'
+      describeMask(a)
     } catch (err) {
       state.annotation = null
       setStatus($('annotation-status'), err.message, 'error')
@@ -535,6 +596,37 @@
       kept.toLocaleString() + '.'
   }
 
+  // Says what the mask will actually do, since a mask that traces the whole
+  // image — the default when nobody adjusted it in the Editor — trims nothing,
+  // and a checkbox that appears to be working is worse than a disabled one.
+  function describeMask (annotation) {
+    var box = $('use-mask')
+    var hint = $('mask-hint')
+    var card = $('mask-option')
+    var mask = annotation && annotation.mask
+
+    if (!mask) {
+      box.disabled = true
+      card.classList.add('inactive')
+      hint.textContent = 'This annotation has no mask, so nothing can be trimmed by one.'
+      return
+    }
+
+    box.disabled = false
+    card.classList.remove('inactive')
+
+    var described = mask.length + '-point mask'
+    if (annotation.width && annotation.height) {
+      var coverage = polygonArea(mask) / (annotation.width * annotation.height)
+      described += ' covering ' + Math.round(coverage * 100) + '% of the image'
+      if (coverage > 0.995) {
+        described += ' — it traces the whole sheet, so it will not trim anything'
+      }
+    }
+    hint.textContent = described + '. Detections whose center falls outside it are discarded: ' +
+      'margin text such as titles, legends and imprints.'
+  }
+
   function refreshRunButton () {
     var ready = !!(state.pixelFeatures && state.annotation && GcpTransformer)
     $('run').disabled = !ready
@@ -580,10 +672,22 @@
       return
     }
 
+    // The mask is in resource coordinates, so the detection's center has to be
+    // put in that same space — Y correction applied — before testing it.
+    var mask = ($('use-mask').checked && !$('use-mask').disabled) ? state.annotation.mask : null
+    var maskDropped = 0
+
     var candidates = state.pixelFeatures.filter(function (f) {
       var score = scoreOf(f.properties)
       if (score === null) { if (!keepUnscored) return false } else if (score < threshold) return false
       if (textNeedle && foldAccents(textOf(f.properties).toLowerCase()).indexOf(textNeedle) === -1) return false
+      if (mask) {
+        var center = geometryCentroid(f.geometry)
+        if (!pointInPolygon([center[0], correctY(center[1])], mask)) {
+          maskDropped++
+          return false
+        }
+      }
       return true
     })
 
@@ -641,6 +745,8 @@
           transformationType: transformationType,
           threshold: threshold,
           scoreFiltered: state.scoreFilterActive,
+          maskDropped: maskDropped,
+          maskUsed: !!mask,
           fullOutlines: fullOutlines
         })
       }
@@ -664,6 +770,9 @@
     var reason = settings.scoreFiltered
       ? 'score below ' + settings.threshold + ' or text filter'
       : 'text filter; scores in this file are all identical, so they were not used'
+    if (settings.maskUsed) {
+      reason += '; ' + settings.maskDropped.toLocaleString() + ' outside the Allmaps mask'
+    }
     var summary = '<strong>' + rows.length.toLocaleString() + '</strong> of <strong>' +
       total.toLocaleString() + '</strong> detections converted. ' +
       dropped.toLocaleString() + ' filtered out (' + reason +
@@ -682,7 +791,7 @@
 
   /* ── Table ──────────────────────────────────────────────────────────────── */
 
-  // The text and score columns are labelled with the field names actually used,
+  // The text and score columns are labeled with the field names actually used,
   // so they can be told apart from any other score-like column in the file.
   function baseColumns () {
     return [
@@ -874,57 +983,146 @@
 
   /* ── Optional map preview (needs a connection; degrades quietly) ───────── */
 
-  var LEAFLET_CSS = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'
-  var LEAFLET_JS = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
-
   function toggleMap () {
     var container = $('map')
     if (!container.hidden) {
       container.hidden = true
+      $('map-controls').hidden = true
       $('map-status').hidden = true
       $('toggle-map').textContent = 'Show map preview'
       return
     }
     container.hidden = false
     $('toggle-map').textContent = 'Hide map preview'
-    if (state.map) { state.map.invalidateSize(); drawMarkers(); return }
+    if (state.map) {
+      $('map-controls').hidden = false
+      state.map.invalidateSize()
+      fitToDetections()
+      drawMarkers()
+      return
+    }
 
-    setStatus($('map-status'), 'Loading map tiles…')
+    setStatus($('map-status'), 'Loading the map viewer…')
     $('map-status').hidden = false
-    loadLeaflet(function (err) {
+    loadMapLibs(function (err) {
       if (err) {
-        setStatus($('map-status'), 'The preview needs an internet connection (it loads Leaflet and OpenStreetMap tiles). The downloads work offline.', 'error')
+        setStatus($('map-status'),
+          'The map viewer could not load: ' + err.message +
+          ' (vendor/allmaps-leaflet.js). The table and downloads are unaffected.', 'error')
         return
       }
-      $('map-status').hidden = true
-      state.map = window.L.map('map')
-      window.L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        attribution: '© OpenStreetMap contributors'
-      }).addTo(state.map)
-      state.map.setView([0, 0], 2)
-      drawMarkers()
+      buildMap()
     })
   }
 
-  function loadLeaflet (done) {
-    if (window.L) return done(null)
+  // Loaded on demand: the viewer bundle is about a megabyte, and most runs end
+  // at the downloads without ever opening a map.
+  function loadMapLibs (done) {
+    if (window.AllmapsLeaflet) return done(null)
+
     var link = document.createElement('link')
     link.rel = 'stylesheet'
-    link.href = LEAFLET_CSS
+    link.href = './vendor/leaflet.css'
     document.head.appendChild(link)
+
     var script = document.createElement('script')
-    script.src = LEAFLET_JS
-    script.onload = function () { done(null) }
-    script.onerror = function () { done(new Error('offline')) }
+    script.src = './vendor/allmaps-leaflet.js'
+    script.onload = function () {
+      done(window.AllmapsLeaflet ? null : new Error('bundle loaded but exported nothing'))
+    }
+    script.onerror = function () { done(new Error('could not load the viewer bundle')) }
     document.head.appendChild(script)
+  }
+
+  function buildMap () {
+    var L = window.AllmapsLeaflet.L
+    state.map = L.map('map', { preferCanvas: true })
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(state.map)
+    state.map.setView([0, 0], 2)
+
+    $('map-controls').hidden = false
+    // Set the view before adding the warped layer: added while the map is still
+    // at its world view, the layer requests tiles for the wrong extent and can
+    // come up blank.
+    fitToDetections()
+    addWarpedMap()
+    drawMarkers()
+  }
+
+  function fitToDetections () {
+    if (!state.map || !state.rows || !state.rows.length) return
+    var L = window.AllmapsLeaflet.L
+    state.map.fitBounds(L.latLngBounds(state.rows.slice(0, 3000).map(function (row) {
+      return [row.lat, row.lon]
+    })).pad(0.1))
+  }
+
+  // The historical map itself, warped live from its IIIF tiles using the same
+  // annotation that produced the coordinates. Added before the detections so
+  // the points draw on top of it.
+  function addWarpedMap () {
+    if (!state.annotationRaw || !window.AllmapsLeaflet.WarpedMapLayer) return
+    try {
+      state.warped = new window.AllmapsLeaflet.WarpedMapLayer(state.annotationRaw, {
+        opacity: currentOpacity()
+      })
+      state.warped.addTo(state.map)
+      watchForTiles()
+    } catch (err) {
+      state.warped = null
+      setStatus($('map-status'),
+        'Could not display the historical map: ' + err.message +
+        '. This needs WebGL2 and a IIIF image server that allows cross-origin requests. The detection points below are unaffected.', 'error')
+      $('map-status').hidden = false
+      $('map-opacity').disabled = true
+    }
+  }
+
+  /*
+   * A IIIF service that never answers leaves an empty map and no error: the
+   * layer is built, the canvas exists, nothing is drawn. David Rumsey's LUNA
+   * server does exactly this — info.json returns instantly while region tiles
+   * time out. So wait for the layer's first tile and say something if none
+   * arrives.
+   */
+  function watchForTiles () {
+    var arrived = false
+    state.map.on('firstmaptileloaded', function () {
+      arrived = true
+      $('map-status').hidden = true
+    })
+
+    window.setTimeout(function () {
+      if (arrived || !state.warped) return
+      var host = state.annotation && state.annotation.label
+      try { host = new URL(host).host } catch (e) { host = 'its IIIF image service' }
+      setStatus($('map-status'),
+        'No image tiles have arrived from ' + host + ', so the historical map is not drawing. ' +
+        'That service may be slow, offline, or refusing tile requests — the coordinates, table and ' +
+        'downloads are unaffected.', 'error')
+      $('map-status').hidden = false
+    }, TILE_WAIT)
+  }
+
+  function currentOpacity () {
+    return Number($('map-opacity').value) / 100
+  }
+
+  function applyOpacity () {
+    var percent = Number($('map-opacity').value)
+    $('map-opacity-value').textContent = percent + '%'
+    if (state.warped && state.warped.setOpacity) state.warped.setOpacity(percent / 100)
   }
 
   function drawMarkers () {
     if (!state.map || !state.rows) return
-    if (state.layer) state.map.removeLayer(state.layer)
-    var L = window.L
-    var markers = state.rows.slice(0, 3000).map(function (row) {
+    if (state.markers) state.map.removeLayer(state.markers)
+    var L = window.AllmapsLeaflet.L
+    var shown = state.rows.slice(0, 3000)
+    var markers = shown.map(function (row) {
       return L.circleMarker([row.lat, row.lon], {
         radius: 4,
         weight: 1,
@@ -933,16 +1131,22 @@
         fillOpacity: 0.8
       }).bindTooltip((row.text || '(no text)') + (row.score_raw === undefined ? '' : ' · ' + row.score_raw))
     })
-    state.layer = L.layerGroup(markers).addTo(state.map)
-    if (markers.length) {
-      state.map.fitBounds(L.latLngBounds(state.rows.slice(0, 3000).map(function (row) {
-        return [row.lat, row.lon]
-      })).pad(0.1))
+    state.markers = L.layerGroup(markers)
+    if ($('show-detections').checked) state.markers.addTo(state.map)
+
+    if (state.rows.length > 3000) {
+      setStatus($('map-status'), 'Showing the first 3,000 of ' +
+        state.rows.length.toLocaleString() + ' detection points.')
+      $('map-status').hidden = false
+    } else {
+      $('map-status').hidden = true
     }
-    setStatus($('map-status'), state.rows.length > 3000
-      ? 'Previewing the first 3,000 label points.'
-      : 'Previewing ' + markers.length.toLocaleString() + ' label points.')
-    $('map-status').hidden = state.rows.length <= 3000
+  }
+
+  function toggleDetections () {
+    if (!state.map || !state.markers) return
+    if ($('show-detections').checked) state.markers.addTo(state.map)
+    else state.map.removeLayer(state.markers)
   }
 
   /* ── Wiring ─────────────────────────────────────────────────────────────── */
@@ -1016,6 +1220,8 @@
     $('dl-geojson').addEventListener('click', downloadGeojson)
     $('dl-points').addEventListener('click', downloadPoints)
     $('toggle-map').addEventListener('click', toggleMap)
+    $('map-opacity').addEventListener('input', applyOpacity)
+    $('show-detections').addEventListener('change', toggleDetections)
 
     refreshRunButton()
   }

@@ -304,12 +304,26 @@ check('non-matching query returns nothing', await searchFor('zzz') === '', await
 $('text-filter').value = ''
 
 console.log('\nY-axis override')
+// The wrong Y axis puts every centroid outside the mask, so this has to run
+// with masking off to observe the mirroring itself.
+$('use-mask').checked = false
 $('y-axis').value = 'down'
 $('run').click()
 await new Promise((resolve) => window.setTimeout(resolve, 200))
 check('downward Y reported', /Y treated as downward/.test($('summary').textContent))
 const mirroredLat = Number(document.querySelectorAll('#table-body tr')[0].children[2].textContent)
 check('wrong Y axis visibly moves the result', Math.abs(mirroredLat - lat) > 0.001, mirroredLat)
+
+// With the mask on, that same mistake empties the results — worth pinning,
+// since it is the loudest signal the app gives that the axis is wrong.
+$('use-mask').checked = true
+$('run').click()
+await new Promise((resolve) => window.setTimeout(resolve, 200))
+check('wrong Y axis plus mask drops everything', [...document.querySelectorAll('#table-body tr')].length === 0,
+  [...document.querySelectorAll('#table-body tr')].length)
+const emptied = $('summary').textContent.replace(/\s+/g, ' ')
+check('and says the mask did it', /^0 of (\d+) detections converted\./.test(emptied) &&
+  new RegExp(emptied.match(/^0 of (\d+)/)[1] + ' outside the Allmaps mask').test(emptied), emptied)
 
 console.log('\nTransformation override')
 $('y-axis').value = 'auto'
@@ -328,6 +342,189 @@ console.log('\nBad input handling')
 paste('pixel-text', 'not json at all')
 check('parse error reported', /class="status error"|status error/.test($('pixel-status').outerHTML))
 check('run disabled after bad input', $('run').disabled === true)
+
+/*
+ * Map preview. jsdom has no WebGL and fetches no subresources, so the real
+ * warped layer cannot render here — these checks cover the wiring around it
+ * (construction, opacity, layer toggling, failure handling) against a stub.
+ * Whether tiles actually warp on screen has to be confirmed in a browser.
+ */
+console.log('\nAllmaps mask trimming')
+// The sample annotation's mask is a quadrilateral inset from the edges:
+// points="117,120 113,1776 4587,1772 4568,101" on a 4708x1860 image.
+paste('annotation-text', read('samples/annotation.example.json'))
+check('mask parsed and described', /4-point mask covering \d+% of the image/.test($('mask-hint').textContent), $('mask-hint').textContent)
+check('mask checkbox enabled', $('use-mask').disabled === false)
+
+// Two detections inside the masked area, two out in the margins.
+const maskBox = (x, y) => [[[x - 30, -(y - 20)], [x + 30, -(y - 20)], [x + 30, -(y + 20)], [x - 30, -(y + 20)], [x - 30, -(y - 20)]]]
+paste('pixel-text', JSON.stringify({
+  type: 'FeatureCollection',
+  features: [
+    { text: 'inside-center', at: [2300, 900] },
+    { text: 'inside-edge', at: [300, 1600] },
+    { text: 'margin-top', at: [2300, 40] },
+    { text: 'margin-left', at: [40, 900] }
+  ].map(({ text, at }) => ({
+    type: 'Feature', properties: { text, score: 0.9 }, geometry: { type: 'Polygon', coordinates: maskBox(at[0], at[1]) }
+  }))
+}))
+$('score-number').value = '0'
+fire($('score-number'), 'input')
+
+const runAndList = async () => {
+  $('run').click()
+  await new Promise((resolve) => window.setTimeout(resolve, 200))
+  return [...document.querySelectorAll('#table-body tr')].map((tr) => tr.children[0].textContent).sort().join(',')
+}
+
+check('mask on: margin text discarded', await runAndList() === 'inside-center,inside-edge', await runAndList())
+check('summary counts mask drops', /2 outside the Allmaps mask/.test($('summary').textContent), $('summary').textContent)
+
+$('use-mask').checked = false
+check('mask off: everything kept', await runAndList() === 'inside-center,inside-edge,margin-left,margin-top', await runAndList())
+check('summary omits the mask when unused', !/Allmaps mask/.test($('summary').textContent), $('summary').textContent)
+$('use-mask').checked = true
+
+// A mask tracing the whole sheet must say so rather than imply it trims.
+const fullSheet = JSON.parse(read('samples/annotation.example.json'))
+fullSheet.target.selector.value = '<svg width="4708" height="1860"><polygon points="0,0 0,1860 4708,1860 4708,0" /></svg>'
+paste('annotation-text', JSON.stringify(fullSheet))
+check('full-sheet mask flagged as trimming nothing', /traces the whole sheet/.test($('mask-hint').textContent), $('mask-hint').textContent)
+check('full-sheet mask keeps every detection', await runAndList() === 'inside-center,inside-edge,margin-left,margin-top', await runAndList())
+
+// No selector at all.
+const noMask = JSON.parse(read('samples/annotation.example.json'))
+delete noMask.target.selector
+paste('annotation-text', JSON.stringify(noMask))
+check('missing mask disables the control', $('use-mask').disabled === true)
+check('missing mask explained', /no mask/.test($('mask-hint').textContent), $('mask-hint').textContent)
+check('mask card dimmed when absent', $('mask-option').className.includes('inactive'))
+
+console.log('\nMap preview wiring')
+const calls = { warped: [], opacity: [], added: [], removed: [], fitted: 0, events: [] }
+function stubViewer ({ throwOnConstruct = false } = {}) {
+  const mapObj = {
+    setView: () => mapObj,
+    invalidateSize: () => {},
+    fitBounds: () => { calls.fitted++ },
+    removeLayer: (l) => { calls.removed.push(l.__name) },
+    on: (name) => { calls.events.push(name) },
+    addLayer: (l) => { calls.added.push(l.__name) }
+  }
+  const layer = (name) => ({ __name: name, addTo (m) { m.addLayer(this); return this } })
+  window.AllmapsLeaflet = {
+    L: {
+      map: () => mapObj,
+      tileLayer: () => layer('tiles'),
+      circleMarker: () => ({ bindTooltip: () => ({}) }),
+      layerGroup: () => layer('markers'),
+      latLngBounds: () => ({ pad: () => 'bounds' })
+    },
+    WarpedMapLayer: class {
+      constructor (annotation, options) {
+        if (throwOnConstruct) throw new Error('WebGL2 unavailable')
+        calls.warped.push({ annotation, options })
+        this.__name = 'warped'
+      }
+      addTo (m) { m.addLayer(this); return this }
+      setOpacity (o) { calls.opacity.push(o) }
+    }
+  }
+  return mapObj
+}
+
+// Get back to a good state: real data, converted, ready to preview.
+paste('pixel-text', read('samples/mapreader-detections.example.geojson'))
+paste('annotation-text', read('samples/annotation.example.json'))
+$('run').click()
+await new Promise((resolve) => window.setTimeout(resolve, 300))
+
+stubViewer()
+$('toggle-map').click()
+await new Promise((resolve) => window.setTimeout(resolve, 50))
+
+check('controls revealed with the map', $('map-controls').hidden === false)
+check('historical map layer constructed', calls.warped.length === 1, calls.warped.length)
+check('annotation passed through verbatim', calls.warped[0]?.annotation?.type === 'Annotation',
+  JSON.stringify(calls.warped[0]?.annotation?.type))
+check('starts fully opaque', calls.warped[0]?.options?.opacity === 1, calls.warped[0]?.options?.opacity)
+check('warped map added beneath the detections', calls.added.join(',') === 'tiles,warped,markers', calls.added.join(','))
+check('waits for the first tile', calls.events.includes('firstmaptileloaded'), calls.events.join(','))
+check('view fitted to the detections', calls.fitted === 1, calls.fitted)
+
+$('map-opacity').value = '40'
+fire($('map-opacity'), 'input')
+check('opacity forwarded to the layer', calls.opacity.join(',') === '0.4', calls.opacity.join(','))
+check('opacity readout updated', $('map-opacity-value').textContent === '40%', $('map-opacity-value').textContent)
+
+$('map-opacity').value = '0'
+fire($('map-opacity'), 'input')
+check('fully transparent is reachable', calls.opacity.at(-1) === 0, calls.opacity.at(-1))
+check('zero shown as 0%', $('map-opacity-value').textContent === '0%', $('map-opacity-value').textContent)
+
+$('show-detections').checked = false
+fire($('show-detections'), 'change')
+check('detections can be hidden', calls.removed.includes('markers'), calls.removed.join(','))
+$('show-detections').checked = true
+fire($('show-detections'), 'change')
+check('detections can be shown again', calls.added.filter((n) => n === 'markers').length === 2, calls.added.join(','))
+
+$('toggle-map').click()
+check('hiding the map hides its controls', $('map-controls').hidden === true && $('map').hidden === true)
+check('button text toggles back', $('toggle-map').textContent === 'Show map preview', $('toggle-map').textContent)
+
+/*
+ * A viewer that cannot build the warped layer must still show the points. The
+ * map is built once per page, so this needs a fresh document rather than
+ * another click on the one above.
+ */
+console.log('\nMap preview failure handling')
+{
+  const page = new JSDOM(read('index.html'), {
+    runScripts: 'dangerously', url: 'https://example.org/', virtualConsole, pretendToBeVisual: true
+  })
+  const w = page.window
+  for (const src of ['vendor/allmaps-transform.js', 'app.js']) {
+    const script = w.document.createElement('script')
+    script.textContent = read(src)
+    w.document.body.appendChild(script)
+  }
+  await new Promise((resolve) => w.setTimeout(resolve, 50))
+  const id = (x) => w.document.getElementById(x)
+  const set = (x, v) => { id(x).value = v; id(x).dispatchEvent(new w.Event('change', { bubbles: true })) }
+
+  const added = []
+  const mapObj = {
+    setView: () => mapObj, invalidateSize: () => {}, fitBounds: () => {},
+    removeLayer: () => {}, addLayer: (l) => added.push(l.__name), on: () => {}
+  }
+  const layer = (name) => ({ __name: name, addTo (m) { m.addLayer(this); return this } })
+  w.AllmapsLeaflet = {
+    L: {
+      map: () => mapObj,
+      tileLayer: () => layer('tiles'),
+      circleMarker: () => ({ bindTooltip: () => ({}) }),
+      layerGroup: () => layer('markers'),
+      latLngBounds: () => ({ pad: () => 'bounds' })
+    },
+    WarpedMapLayer: class { constructor () { throw new Error('WebGL2 unavailable') } }
+  }
+
+  set('pixel-text', read('samples/mapreader-detections.example.geojson'))
+  set('annotation-text', read('samples/annotation.example.json'))
+  id('run').click()
+  await new Promise((resolve) => w.setTimeout(resolve, 300))
+  id('toggle-map').click()
+  await new Promise((resolve) => w.setTimeout(resolve, 50))
+
+  const status = id('map-status').textContent
+  check('failure explained to the user', /Could not display the historical map/.test(status), status)
+  check('WebGL2 named as a requirement', /WebGL2/.test(status))
+  check('opacity slider disabled on failure', id('map-opacity').disabled === true)
+  check('detections still drawn', added.includes('markers'), added.join(','))
+  check('table untouched by the viewer failure', w.document.querySelectorAll('#table-body tr').length > 0)
+}
 
 function state_rows () {
   return [...document.querySelectorAll('#table-body tr')].length

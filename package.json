@@ -4,13 +4,22 @@
   "private": true,
   "description": "Browser app that turns MapReader pixel-coordinate GeoJSON into lat/long tables using an Allmaps Georeference Annotation.",
   "scripts": {
-    "build": "esbuild build/entry.js --bundle --format=iife --global-name=AllmapsTransform --outfile=vendor/allmaps-transform.js --legal-comments=none",
+    "build": "npm run build:transform && npm run build:leaflet && npm run build:css && npm run verify:vendor",
     "serve": "python3 -m http.server 8000",
-    "test": "node test/smoke.mjs"
+    "test": "node test/vendor-check.mjs && node test/smoke.mjs",
+    "build:transform": "esbuild build/entry.js --bundle --format=iife --global-name=AllmapsTransform --outfile=vendor/allmaps-transform.js --legal-comments=none",
+    "build:leaflet": "esbuild build/leaflet-entry.js --bundle --format=iife --global-name=AllmapsLeaflet --outfile=vendor/allmaps-leaflet.js --legal-comments=none --minify",
+    "build:css": "cp node_modules/leaflet/dist/leaflet.css vendor/leaflet.css",
+    "verify:vendor": "node test/vendor-check.mjs",
+    "check:browser": "node test/browser-check.mjs"
   },
   "devDependencies": {
+    "@allmaps/leaflet": "^1.0.0-beta.54",
     "@allmaps/transform": "^1.0.0-beta.52",
     "esbuild": "^0.28.2",
     "jsdom": "^27.0.1"
+  },
+  "overrides": {
+    "zod": "4.4.3"
   }
 }

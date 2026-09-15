@@ -171,8 +171,25 @@ button.secondary { background: var(--surface); color: var(--accent); }
 
 .downloads { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 1rem; }
 
+.map-controls {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  flex-wrap: wrap;
+  margin-bottom: .6rem;
+  padding: .6rem .75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: .85rem;
+}
+.map-controls > label { font-weight: 600; }
+.map-controls input[type="range"] { flex: 1; min-width: 140px; accent-color: var(--accent); }
+.map-controls #map-opacity-value { width: 3.2rem; font-variant-numeric: tabular-nums; }
+.map-controls .check { margin: 0; margin-left: auto; }
+
 #map {
-  height: 420px;
+  height: 520px;
   margin-bottom: 1rem;
   border: 1px solid var(--line);
   border-radius: var(--radius);
