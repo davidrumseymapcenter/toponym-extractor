@@ -208,6 +208,9 @@ button.secondary { background: var(--surface); color: var(--accent); }
   background: var(--surface);
 }
 
+.pager { display: flex; align-items: center; gap: .75rem; margin-top: .6rem; font-size: .85rem; }
+.pager button { padding: .3rem .7rem; font-size: .8rem; }
+
 .table-wrap {
   max-height: 60vh;
   overflow: auto;
@@ -237,7 +240,9 @@ th:hover { color: var(--accent); }
 th .arrow { color: var(--accent); }
 
 td.num { text-align: right; font-variant-numeric: tabular-nums; }
+th.num { text-align: right; }
 tbody tr:hover { background: #f7f5f0; }
+tbody tr.selected { background: #fff3b0; }
 
 footer {
   padding-top: 1.5rem;
@@ -269,6 +274,7 @@ code {
   }
   th { background: #262a30; }
   tbody tr:hover { background: #22262c; }
+  tbody tr.selected { background: #3d3820; }
   code { background: #262a30; }
   .card.dragover { background: #1b2a30; }
 }

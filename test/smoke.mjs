@@ -203,7 +203,7 @@ check('Y reported as negative', /Y treated as negative/.test(summary), summary)
 const rows = [...document.querySelectorAll('#table-body tr')]
 check('table has rows', rows.length > 0, rows.length)
 const header = [...document.querySelectorAll('#table-head th')].map((th) => th.textContent.trim())
-check('table columns', header.join(',') === 'text,score,latitude,longitude,pixel x,pixel y,geometry,vertices', header.join(','))
+check('table columns', header.join(',') === 'text,score,latitude,longitude,pixel x,pixel y', header.join(','))
 
 const first = rows[0].children
 const lat = Number(first[2].textContent)
@@ -573,7 +573,7 @@ function stubViewer ({ throwOnConstruct = false } = {}) {
     L: {
       map: () => mapObj,
       tileLayer: () => layer('tiles'),
-      circleMarker: () => ({ bindTooltip: () => ({}) }),
+      circleMarker: () => ({ bindTooltip: () => ({}), on: () => {} }),
       layerGroup: () => layer('markers'),
       latLngBounds: () => ({ pad: () => 'bounds' })
     },
@@ -660,7 +660,7 @@ console.log('\nMap preview failure handling')
     L: {
       map: () => mapObj,
       tileLayer: () => layer('tiles'),
-      circleMarker: () => ({ bindTooltip: () => ({}) }),
+      circleMarker: () => ({ bindTooltip: () => ({}), on: () => {} }),
       layerGroup: () => layer('markers'),
       latLngBounds: () => ({ pad: () => 'bounds' })
     },
