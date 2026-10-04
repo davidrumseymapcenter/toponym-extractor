@@ -24,7 +24,9 @@
   var DETECTION_PATTERN = /^(det|detect|detection|box|bbox|obj|objectness)[_-]?(score|conf|confidence|prob|probability)$/i
   var SCORE_KEYS = ['score', 'confidence', 'prob']
 
-  var MAX_TABLE_ROWS = 1000
+  // Most detections the table and the map each display; downloads hold every
+  // row. One limit for both, so under it every row has a dot and vice versa.
+  var MAX_SHOWN = 5000
   var TILE_WAIT = 15000 // ms to wait for the first IIIF tile before complaining
   var CHUNK_SIZE = 200 // features transformed per animation frame
 
@@ -48,7 +50,13 @@
     columns: [],
     map: null,
     warped: null, // WarpedMapLayer showing the historical map itself
-    markers: null // layer group of detection points
+    markers: null, // layer group of detection points
+    markerLayers: {}, // circle markers keyed by their row's data-marker-id
+    selectedMarker: null, // the marker currently highlighted from the table
+    selectedId: null, // data-marker-id of the selected row, kept across sorts
+    page: 0, // which MAX_SHOWN-row page the table and map show
+    pageRows: null, // the rows on that page, in table order
+    rowIds: null // Map of row → its data-marker-id
   }
 
   var $ = function (id) { return document.getElementById(id) }
@@ -580,6 +588,10 @@
       var parts = [result.features.length.toLocaleString() + ' features loaded' + (origin ? ' from ' + origin : '')]
       parts.push(describeScores(result.features))
       parts.push('Y looks ' + (detected === 'negated' ? 'negative (will be flipped)' : 'downward (used as-is)'))
+      if (result.features.length > MAX_SHOWN) {
+        parts.push('large file: the page may be slow, and if more than ' + MAX_SHOWN.toLocaleString() +
+          ' pass the filters, the table and map show them in pages of ' + MAX_SHOWN.toLocaleString())
+      }
       setStatus($('pixel-status'), parts.concat(result.warnings).join(' · '), 'ok')
       $('y-axis-hint').dataset.detected = detected
     } catch (err) {
@@ -970,6 +982,9 @@
 
     setStatus($('run-status'), 'Done.', 'ok')
     $('results').hidden = false
+    // A new set of rows: back to the first page, with nothing selected.
+    state.page = 0
+    state.selectedId = null
     buildColumns()
     renderTable()
     if (state.map) drawMarkers()
@@ -989,9 +1004,10 @@
       { key: 'lat', label: 'latitude', num: true, digits: 6 },
       { key: 'lon', label: 'longitude', num: true, digits: 6 },
       { key: 'pixel_x', label: 'pixel x', num: true, digits: 1 },
-      { key: 'pixel_y', label: 'pixel y', num: true, digits: 1 },
-      { key: 'geometry_type', label: 'geometry' },
-      { key: 'vertex_count', label: 'vertices', num: true, digits: 0 }
+      { key: 'pixel_y', label: 'pixel y', num: true, digits: 1 }
+      // geometry_type and vertex_count are left to the CSV: detections are
+      // all polygons, and text-spotting models give every outline the same
+      // number of points, so as columns they never vary.
     ]
   }
 
@@ -1036,6 +1052,7 @@
     state.columns.forEach(function (column) {
       var th = document.createElement('th')
       th.textContent = column.label
+      if (column.num) th.className = 'num'
       if (state.sortKey === column.key) {
         var arrow = document.createElement('span')
         arrow.className = 'arrow'
@@ -1046,10 +1063,19 @@
         if (state.sortKey === column.key) state.sortDir = -state.sortDir
         else { state.sortKey = column.key; state.sortDir = 1 }
         state.sortColumn = column
-        renderTable()
+        // The sort spans every row, so with more than one page it changes
+        // which rows the first page (and the map) holds.
+        if (state.rows.length > MAX_SHOWN) showPage(0)
+        else renderTable()
       }
       head.appendChild(th)
     })
+
+    // Each row's id is its position in state.rows, which never changes with
+    // sorting or paging, so a row and its map marker always share an id.
+    var markerIds = new Map()
+    state.rows.forEach(function (row, index) { markerIds.set(row, String(index)) })
+    state.rowIds = markerIds
 
     var rows = state.rows.slice()
     if (state.sortKey) {
@@ -1066,10 +1092,16 @@
 
     var body = $('table-body')
     body.innerHTML = ''
-    var shown = rows.slice(0, MAX_TABLE_ROWS)
+    var pages = Math.max(1, Math.ceil(rows.length / MAX_SHOWN))
+    state.page = Math.min(state.page, pages - 1)
+    var start = state.page * MAX_SHOWN
+    var shown = rows.slice(start, start + MAX_SHOWN)
+    state.pageRows = shown // the map draws the same rows
     var fragment = document.createDocumentFragment()
     shown.forEach(function (row) {
       var tr = document.createElement('tr')
+      tr.setAttribute('data-marker-id', markerIds.get(row))
+      if (markerIds.get(row) === state.selectedId) tr.className = 'selected'
       state.columns.forEach(function (column) {
         var td = document.createElement('td')
         td.textContent = formatCell(row, column)
@@ -1080,10 +1112,25 @@
     })
     body.appendChild(fragment)
 
-    $('table-note').textContent = rows.length > MAX_TABLE_ROWS
-      ? 'Showing the first ' + MAX_TABLE_ROWS.toLocaleString() + ' of ' + rows.length.toLocaleString() +
-        ' rows. Downloads contain every row. Click a column heading to sort.'
+    $('pager').hidden = pages === 1
+    $('page-info').textContent = 'Rows ' + (start + 1).toLocaleString() + '–' +
+      (start + shown.length).toLocaleString() + ' of ' + rows.length.toLocaleString() +
+      ' (page ' + (state.page + 1) + ' of ' + pages + ')'
+    $('page-prev').disabled = state.page === 0
+    $('page-next').disabled = state.page === pages - 1
+
+    $('table-note').textContent = pages > 1
+      ? 'The table and map show ' + MAX_SHOWN.toLocaleString() + ' rows at a time. ' +
+        'Sorting covers every row. Downloads contain every row. Click a column heading to sort.'
       : 'Click a column heading to sort.'
+  }
+
+  // Switches the table, and the map with it, to another page of rows.
+  function showPage (page) {
+    state.page = page
+    renderTable()
+    if (state.map) drawMarkers()
+    document.querySelector('.table-wrap').scrollTop = 0
   }
 
   /* ── Downloads ──────────────────────────────────────────────────────────── */
@@ -1306,26 +1353,33 @@
     if (state.warped && state.warped.setOpacity) state.warped.setOpacity(percent / 100)
   }
 
+  var defaultStyle = { fillColor: '#3388ff', fillOpacity: 0.8, color: '#fff', weight: 1, radius: 6 }
+  var highlightStyle = { fillColor: '#ffff00', fillOpacity: 1, color: '#fff', weight: 2, radius: 8 }
+
   function drawMarkers () {
-    if (!state.map || !state.rows) return
+    if (!state.map || !state.pageRows) return
     if (state.markers) state.map.removeLayer(state.markers)
     var L = window.AllmapsLeaflet.L
-    var shown = state.rows.slice(0, 3000)
+    var shown = state.pageRows
+    state.markerLayers = {}
+    state.selectedMarker = null
     var markers = shown.map(function (row) {
-      return L.circleMarker([row.lat, row.lon], {
-        radius: 4,
-        weight: 1,
-        color: '#1f6f8b',
-        fillColor: '#5fb0cc',
-        fillOpacity: 0.8
-      }).bindTooltip((row.text || '(no text)') + (row.score_raw === undefined ? '' : ' · ' + row.score_raw))
+      var id = state.rowIds.get(row)
+      var marker = L.circleMarker([row.lat, row.lon], defaultStyle)
+      marker.bindTooltip((row.text || '(no text)') + (row.score_raw === undefined ? '' : ' · ' + row.score_raw))
+      marker.on('click', function () { selectMarker(id) })
+      state.markerLayers[id] = marker
+      return marker
     })
     state.markers = L.layerGroup(markers)
     if ($('show-detections').checked) state.markers.addTo(state.map)
+    // A selection on this page survives the redraw; one on another page waits
+    // until its page comes back.
+    if (state.markerLayers[state.selectedId]) highlightMarker(state.selectedId)
 
-    if (state.rows.length > 3000) {
-      setStatus($('map-status'), 'Showing the first 3,000 of ' +
-        state.rows.length.toLocaleString() + ' detection points.')
+    if (state.rows.length > MAX_SHOWN) {
+      setStatus($('map-status'), 'Showing the ' + shown.length.toLocaleString() + ' detections on the ' +
+        'table\'s current page, of ' + state.rows.length.toLocaleString() + ' in all.')
       $('map-status').hidden = false
     } else {
       $('map-status').hidden = true
@@ -1336,6 +1390,49 @@
     if (!state.map || !state.markers) return
     if ($('show-detections').checked) state.markers.addTo(state.map)
     else state.map.removeLayer(state.markers)
+  }
+
+  // Clicking a table row flies the map to that row's marker and highlights it.
+  // Does nothing while the map is closed.
+  function selectRow (event) {
+    var tr = event.target.closest('tr')
+    if (!tr || !state.map || $('map').hidden) return
+    var marker = highlightMarker(tr.getAttribute('data-marker-id'))
+    if (marker) state.map.flyTo(marker.getLatLng(), 14)
+  }
+
+  // Clicking a marker highlights it and scrolls its row into view. Only the
+  // table scrolls, not the page, so the map stays where it is.
+  function selectMarker (id) {
+    highlightMarker(id)
+    var tr = $('table-body').querySelector('tr[data-marker-id="' + id + '"]')
+    if (!tr) return
+    var wrap = tr.closest('.table-wrap')
+    var offset = tr.getBoundingClientRect().top - wrap.getBoundingClientRect().top
+    wrap.scrollBy({ top: offset - (wrap.clientHeight - tr.offsetHeight) / 2, behavior: 'smooth' })
+  }
+
+  // Highlights the marker and table row with this id, returning the marker.
+  function highlightMarker (id) {
+    var marker = state.markerLayers[id]
+    if (!marker) return null
+    if (state.selectedMarker && state.selectedMarker !== marker) {
+      state.selectedMarker.setStyle(defaultStyle)
+    }
+    marker.setStyle(highlightStyle)
+    marker.bringToFront()
+    state.selectedMarker = marker
+    selectTableRow(id)
+    return marker
+  }
+
+  // Marks the row with this data-marker-id as selected, or clears it for null.
+  function selectTableRow (id) {
+    state.selectedId = id
+    var rows = $('table-body').querySelectorAll('tr')
+    for (var i = 0; i < rows.length; i++) {
+      rows[i].classList.toggle('selected', rows[i].getAttribute('data-marker-id') === id)
+    }
   }
 
   /* ── Wiring ─────────────────────────────────────────────────────────────── */
@@ -1420,6 +1517,9 @@
     $('toggle-map').addEventListener('click', toggleMap)
     $('map-opacity').addEventListener('input', applyOpacity)
     $('show-detections').addEventListener('change', toggleDetections)
+    $('table-body').addEventListener('click', selectRow)
+    $('page-prev').addEventListener('click', function () { showPage(state.page - 1) })
+    $('page-next').addEventListener('click', function () { showPage(state.page + 1) })
 
     refreshRunButton()
   }
